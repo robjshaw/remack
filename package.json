@@ -15,7 +15,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test",
     "example": "node examples/minimal-bot/app.js"
   },
   "dependencies": {
