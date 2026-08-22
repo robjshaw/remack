@@ -1,0 +1,36 @@
+{
+  "name": "@tbp/boltkit",
+  "version": "0.1.0",
+  "description": "Batteries-included toolkit for building Slack bots on @slack/bolt: dual-mode auth bootstrap, Postgres installation store, handler registrar, central error handling, engagement analytics, feature gating.",
+  "type": "commonjs",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "migrations",
+    "README.md"
+  ],
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "example": "node examples/minimal-bot/app.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.4.0",
+    "@slack/web-api": "^7.10.0"
+  },
+  "peerDependencies": {
+    "pg": ">=8"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "dotenv": "^17.2.3"
+  }
+}
