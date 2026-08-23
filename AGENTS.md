@@ -216,6 +216,30 @@ is always the raw shape.)
 | `ext/feature-access.js` | `createFeatureAccess({storage, features, failOpen?})` | pass `app.storage`; failOpen default true |
 | `ext/engagement-tracker.js` | `createEngagementTracker({storage, eventTypes?})` | pass `app.storage`; aggregates computed in JS — bot-scale by design |
 
+## CLI (`slackline`, bin/slackline.js — zero-dep, topic:command style)
+
+- `create <dir> [--mode token|oauth] [--name]` — scaffold: package.json
+  (file: dep on this repo), app.js, routes/ with working command/action/
+  view/event examples, .env.example, README. Refuses to overwrite an
+  existing package.json.
+- `dev [entry] [--no-watch]` — spawns `node --watch app.js` with env layered
+  process env → `./.env` (built-in parser) → active profile. Fails fast with
+  guidance when SLACK_SIGNING_SECRET is missing.
+- `routes [--dir routes]` — table of kind/id/exports; filename-derived, with
+  best-effort module import for the exports column.
+- `manifest [--url U] [--name N] [--oauth] [--out file] [--dir routes]` —
+  Slack App Manifest JSON derived from route filenames only (never imports
+  user code): slash_commands from `command.*`, bot_events from `event.*`,
+  interactivity from action/view/shortcut/options, app_home from
+  `event.app_home_opened`, scopes from a small event→scope map
+  (+`chat:write`, `commands`), `redirect_urls` with `--oauth`.
+- `profiles`, `profiles:add <name> [--bot-token --signing-secret --client-id
+  --client-secret --state-secret --alerts-channel] [--no-input]`,
+  `profiles:use <name>`, `profiles:remove <name>` — credential profiles at
+  `$XDG_CONFIG_HOME/slackline/config.json` (override dir with
+  `SLACKLINE_CONFIG_DIR`), tokens masked in listings, newest add becomes
+  active, field→env mapping in `lib/cli/config.js` `PROFILE_ENV_MAP`.
+
 ## Testing your bot
 
 `node:test` friendly: build a signed Request (HMAC-SHA256 of

@@ -20,6 +20,17 @@ humans and LLMs alike.
 
 ## Quickstart
 
+```
+npm link                        # once, from this repo (registers the `slackline` command)
+slackline create my-bot         # scaffold: app.js + working routes for every pattern
+cd my-bot && npm install
+slackline manifest --url https://YOUR-TUNNEL   # paste into api.slack.com → "Create from manifest"
+slackline profiles:add my-bot   # save credentials once (twilio-cli style; or cp .env.example .env)
+slackline dev                   # run with watch; env comes from .env + active profile
+```
+
+Or by hand — the whole app is:
+
 ```js
 // app.js
 import { createApp, serve } from '@tbp/slackline';
@@ -57,6 +68,20 @@ Point every Slack Request URL (commands, interactivity, events, options) at
 | `shortcut.new_task.js` | global/message shortcut |
 | `options.project_picker.js` | external-select suggestions |
 | `event.app_home_opened.js` | Events API event type |
+
+## CLI
+
+| Command | Does |
+|---|---|
+| `slackline create <dir>` | Scaffold a bot (`--mode token\|oauth`) |
+| `slackline dev [entry]` | Run with `--watch`; env layered process → `.env` → active profile |
+| `slackline routes` | Show the route table with each module's exports |
+| `slackline manifest` | Slack App Manifest derived from `routes/` (`--url`, `--oauth`, `--out`) |
+| `slackline profiles[:add\|:use\|:remove]` | Credential profiles in `~/.config/slackline/` |
+
+The manifest is the onboarding shortcut: your route files already declare the
+commands, events, and interactivity — `manifest` turns them into the exact
+JSON Slack's "Create from manifest" screen wants, right URLs included.
 
 ## Env vars
 
