@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createFeatureAccess, AccessEventType } from '../ext/feature-access.js';
-import { fakePool, fakeLogger } from './fakes.js';
+import { memoryStorage } from '../lib/storage.js';
+import { fakeLogger } from './fakes.js';
 
 const FEATURES = {
   'report': { key: 'report', name: 'Reports', status: 'live', requiresAccess: false },
@@ -10,83 +11,95 @@ const FEATURES = {
   'secret-tool': { key: 'secret_tool', name: 'Secret Tool', status: 'coming_soon', requiresAccess: true },
 };
 
-test('live features allow everyone without touching the DB', async () => {
-  const pool = fakePool();
-  const access = createFeatureAccess({ pool, features: FEATURES, logger: fakeLogger() });
+function makeAccess(overrides = {}) {
+  return createFeatureAccess({ storage: memoryStorage(), features: FEATURES, logger: fakeLogger(), ...overrides });
+}
 
-  assert.equal(await access.hasAccess('report', 'U1'), true);
-  assert.equal(pool.calls.length, 0);
-  assert.equal(await access.hasAccess('nope', 'U1'), false, 'unknown features denied');
+function failingStorage() {
+  const fail = async () => { throw new Error('storage down'); };
+  return { get: fail, put: fail, delete: fail, list: fail };
+}
+
+test('requires storage', () => {
+  assert.throws(() => createFeatureAccess({ features: FEATURES }), /storage/);
 });
 
-test('gated features check the access table; failOpen governs degrade', async () => {
-  const pool = fakePool([{ rows: [{ x: 1 }] }, { rows: [] }]);
-  const access = createFeatureAccess({ pool, features: FEATURES, logger: fakeLogger() });
+test('live features allow everyone; unknown features denied', async () => {
+  const access = makeAccess();
+  assert.equal(await access.hasAccess('report', 'U1'), true);
+  assert.equal(await access.hasAccess('nope', 'U1'), false);
+});
 
-  assert.equal(await access.hasAccess('pilot-tool', 'U_IN'), true);
-  assert.equal(await access.hasAccess('pilot-tool', 'U_OUT'), false);
-  assert.deepEqual(pool.calls[0].params, ['pilot_tool', 'U_IN']);
+test('grant → hasAccess → revoke lifecycle', async () => {
+  const access = makeAccess();
 
-  const open = createFeatureAccess({ features: FEATURES, failOpen: true, logger: fakeLogger() });
+  assert.equal(await access.hasAccess('pilot-tool', 'U1'), false);
+
+  const first = await access.grantAccess('pilot-tool', 'U1', 'Target', 'U_G', 'Granter');
+  assert.deepEqual(first, { success: true, alreadyHadAccess: false });
+  assert.equal(await access.hasAccess('pilot-tool', 'U1'), true);
+
+  const second = await access.grantAccess('pilot-tool', 'U1', 'Target', 'U_G', 'Granter');
+  assert.deepEqual(second, { success: true, alreadyHadAccess: true });
+
+  const revoked = await access.revokeAccess('pilot-tool', 'U1', 'U_R', 'Revoker');
+  assert.deepEqual(revoked, { success: true, hadAccess: true });
+  assert.equal(await access.hasAccess('pilot-tool', 'U1'), false);
+
+  const again = await access.revokeAccess('pilot-tool', 'U1', 'U_R', 'Revoker');
+  assert.deepEqual(again, { success: true, hadAccess: false });
+});
+
+test('getAccessList returns grants for one feature only', async () => {
+  const access = makeAccess();
+  await access.grantAccess('pilot-tool', 'U1', 'One', 'U_G', 'Granter');
+  await access.grantAccess('pilot-tool', 'U2', 'Two', 'U_G', 'Granter');
+  await access.grantAccess('secret-tool', 'U3', 'Three', 'U_G', 'Granter');
+
+  const list = await access.getAccessList('pilot-tool');
+  assert.deepEqual(list.map((entry) => entry.userId).sort(), ['U1', 'U2']);
+  assert.equal(list[0].grantedBy, 'Granter');
+  assert.ok(list[0].grantedAt);
+});
+
+test('failOpen governs behavior when storage errors', async () => {
+  const open = makeAccess({ storage: failingStorage(), failOpen: true });
   assert.equal(await open.hasAccess('pilot-tool', 'U1'), true);
 
-  const closed = createFeatureAccess({ features: FEATURES, failOpen: false, logger: fakeLogger() });
+  const closed = makeAccess({ storage: failingStorage(), failOpen: false });
   assert.equal(await closed.hasAccess('pilot-tool', 'U1'), false);
-
-  const erroring = createFeatureAccess({
-    pool: fakePool(() => { throw new Error('down'); }),
-    features: FEATURES, failOpen: false, logger: fakeLogger(),
-  });
-  assert.equal(await erroring.hasAccess('pilot-tool', 'U1'), false);
 });
 
-test('grantAccess inserts and logs; repeat grant reports alreadyHadAccess', async () => {
-  const pool = fakePool([
-    { rows: [] }, { rows: [] }, { rows: [] },
-    { rows: [{ x: 1 }] },
-  ]);
-  const access = createFeatureAccess({ pool, features: FEATURES, logger: fakeLogger() });
+test('access log feeds getAccessAnalytics with grouped counts', async () => {
+  const access = makeAccess();
+  await access.grantAccess('pilot-tool', 'U1', 'One', 'U_G', 'Granter');
+  await access.logAccessDenied('pilot-tool', 'U2', 'Two', 'C1');
+  await access.logAccessDenied('pilot-tool', 'U3', 'Three', 'C1');
+  await access.logAccessDenied('secret-tool', 'U2', 'Two', 'C1');
 
-  const first = await access.grantAccess('pilot-tool', 'U_T', 'Target', 'U_G', 'Granter');
-  assert.deepEqual(first, { success: true, alreadyHadAccess: false });
-  assert.match(pool.calls[2].text, /INSERT INTO public\.feature_access_log/);
-  assert.equal(pool.calls[2].params[0], AccessEventType.ACCESS_GRANTED);
+  const analytics = await access.getAccessAnalytics(30);
+  const denied = analytics.find((row) => row.featureKey === 'pilot_tool' && row.eventType === AccessEventType.ACCESS_DENIED);
+  assert.equal(denied.eventCount, 2);
+  assert.equal(denied.uniqueUsers, 2);
 
-  const second = await access.grantAccess('pilot-tool', 'U_T', 'Target', 'U_G', 'Granter');
-  assert.deepEqual(second, { success: true, alreadyHadAccess: true });
-});
-
-test('revokeAccess reports whether the user had access', async () => {
-  const pool = fakePool([{ rows: [{ id: 7 }] }, { rows: [] }, { rows: [] }]);
-  const access = createFeatureAccess({ pool, features: FEATURES, logger: fakeLogger() });
-
-  assert.deepEqual(await access.revokeAccess('pilot-tool', 'U_T', 'U_R', 'R'), { success: true, hadAccess: true });
-  assert.deepEqual(await access.revokeAccess('pilot-tool', 'U_T', 'U_R', 'R'), { success: true, hadAccess: false });
+  const granted = analytics.find((row) => row.eventType === AccessEventType.ACCESS_GRANTED);
+  assert.equal(granted.featureKey, 'pilot_tool');
 });
 
 test('buildNoAccessMessage includes docs link only when configured; override wins', () => {
-  const access = createFeatureAccess({ features: FEATURES, logger: fakeLogger() });
+  const access = makeAccess();
 
   assert.ok(JSON.stringify(access.buildNoAccessMessage('pilot-tool')).includes('docs.example.com'));
   assert.ok(!JSON.stringify(access.buildNoAccessMessage('secret-tool')).includes('Learn more'));
+  assert.ok(JSON.stringify(access.buildNoAccessMessage('secret-tool')).includes('coming soon'));
   assert.equal(access.buildNoAccessMessage('nope').text, 'This feature is not available.');
 
-  const custom = createFeatureAccess({
-    features: FEATURES,
-    logger: fakeLogger(),
-    buildNoAccessMessage: (cmd, config) => ({ text: `no ${cmd} (${config?.name})` }),
-  });
+  const custom = makeAccess({ buildNoAccessMessage: (cmd, config) => ({ text: `no ${cmd} (${config?.name})` }) });
   assert.equal(custom.buildNoAccessMessage('pilot-tool').text, 'no pilot-tool (Pilot Tool)');
 });
 
-test('table names are injectable and validated', async () => {
-  assert.throws(() => createFeatureAccess({ features: FEATURES, tables: { access: 'x; DROP' } }), /Invalid/);
-
-  const pool = fakePool([{ rows: [] }]);
-  const access = createFeatureAccess({
-    pool, features: FEATURES, logger: fakeLogger(),
-    tables: { access: 'app.gates', log: 'app.gates_log' },
-  });
-  await access.hasAccess('pilot-tool', 'U1');
-  assert.match(pool.calls[0].text, /FROM app\.gates WHERE/);
+test('buildAccessGrantedMessage covers both branches', () => {
+  const access = makeAccess();
+  assert.match(access.buildAccessGrantedMessage('pilot-tool', 'U1', true).text, /already has access/);
+  assert.match(JSON.stringify(access.buildAccessGrantedMessage('pilot-tool', 'U1', false)), /Added <@U1>/);
 });

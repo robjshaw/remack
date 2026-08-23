@@ -4,9 +4,10 @@ A zero-dependency, Remix-shaped Slack framework. The app is a web-standard
 `(Request) => Response` fetch handler; every Slack surface is one file in a
 `routes/` directory; the HTTP response IS the ack.
 
-- **Zero runtime dependencies.** Signature verification via WebCrypto, the
-  Web API via `fetch`, OAuth included. Node ≥ 22 (Bun/Deno/Workers-portable
-  core).
+- **Zero runtime dependencies, no database required.** Signature
+  verification via WebCrypto, the Web API via `fetch`, OAuth included —
+  state lives in a pluggable KV storage that defaults to memory. Node ≥ 22
+  (Bun/Deno/Workers-portable core).
 - **Route modules.** Colocate `loader` (data), `default` (handler), `render`
   (Block Kit), and `ErrorBoundary` per surface — no build step, routes are
   discovered with an fs scan at startup.
@@ -67,14 +68,37 @@ Point every Slack Request URL (commands, interactivity, events, options) at
 | `SLACKLINE_DEBUG` | Debug output from the fallback logger |
 
 Env is only a default for explicit options. slackline never reads
-`DATABASE_URL` — Postgres-backed extras take an injected pool.
+`DATABASE_URL` and never opens connections.
+
+## Storage — portable by default
+
+Everything that persists (OAuth installations, feature grants, engagement
+events) speaks one four-method KV contract. Pick the backend that fits, or
+implement the contract over anything:
+
+```js
+import { createApp, fileStorage } from '@tbp/slackline';
+
+createApp({ ... });                                        // memory (default): zero setup, dev-perfect
+createApp({ storage: fileStorage('./data/bot.json') });    // one JSON file: survives restarts
+```
+
+```js
+import { postgresStorage } from '@tbp/slackline/ext/postgres-storage.js';
+createApp({ storage: postgresStorage({ pool }) });         // shared DB: multi-instance (1 table, 1 migration)
+```
+
+OAuth mode needs no store configuration — installations persist in whatever
+`storage` you chose (with a startup warning if that's the in-memory
+default).
 
 ## Optional modules (`@tbp/slackline/ext/*`)
 
-`installation-store` (Postgres OAuth store), `ops-alert` (never-throws job
-alerts), `file-delivery` (DM upload with `missing_scope` inline fallback),
-`plan-block` (progress UI), `feature-access` (invite-only gating),
-`engagement-tracker` (analytics). SQL in `migrations/`.
+All storage-based (pass `app.storage`) except the pure ones: `ops-alert`
+(never-throws job alerts), `file-delivery` (DM upload with `missing_scope`
+inline fallback), `plan-block` (progress UI), `feature-access` (invite-only
+gating), `engagement-tracker` (analytics), `postgres-storage` (the Postgres
+storage adapter; SQL in `migrations/`).
 
 ## Development
 

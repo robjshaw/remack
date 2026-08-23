@@ -1,7 +1,7 @@
 {
   "name": "@tbp/slackline",
-  "version": "0.2.0",
-  "description": "Zero-dependency, Remix-shaped Slack framework: web-standard Request/Response core, file-based route modules with colocated loader/render/action, error boundaries, and composable extras.",
+  "version": "0.3.0",
+  "description": "Zero-dependency, Remix-shaped Slack framework: web-standard Request/Response core, file-based route modules with colocated loader/render/action, error boundaries, and pluggable KV storage (memory/file/postgres) — no database required.",
   "type": "module",
   "exports": {
     ".": "./lib/index.js",

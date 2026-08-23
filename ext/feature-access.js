@@ -1,25 +1,22 @@
-import { normalizeLogger } from '../lib/logger.js';
-import { extractUserId } from '../lib/helpers.js';
-
 /**
- * Feature Access Control
+ * Feature Access Control — on the storage contract, portable anywhere.
  *
- * Ring-fencing system for pilot/coming-soon features.
+ * Ring-fencing for pilot/coming-soon features:
  * - Live features (requiresAccess: false): available to everyone
  * - Pilot/Coming Soon (requiresAccess: true): invite-only via /command add @user
  *
- * Analytics captured in the access log:
- * - Feature adoption curves
- * - Who's adding whom (viral growth)
- * - Access denied patterns (demand signal)
- *
- * Schema: migrations/003_feature_access.sql.
+ * Grants live in namespace 'feature-access' (key `{featureKey}:{userId}`);
+ * an audit log of grants/revokes/denials (adoption + demand signal) lives in
+ * 'feature-access-log'. Works with any slackline storage — memory, file, or
+ * a shared adapter.
  */
 
+import { normalizeLogger } from '../lib/logger.js';
+import { extractUserId } from '../lib/helpers.js';
 
-const IDENTIFIER_RE = /^[a-z_][a-z0-9_.]*$/i;
+const ACCESS_NS = 'feature-access';
+const LOG_NS = 'feature-access-log';
 
-// Event types for logging
 export const AccessEventType = {
   ACCESS_GRANTED: 'access_granted',
   ACCESS_REVOKED: 'access_revoked',
@@ -29,100 +26,56 @@ export const AccessEventType = {
 
 /**
  * @typedef {Object} FeatureConfig
- * @property {string} key - Stable key stored in the DB (e.g. 'buyer_list')
- * @property {string} name - Human-readable name (e.g. 'M&A Buyer Matching')
+ * @property {string} key - Stable key stored with grants (e.g. 'buyer_list')
+ * @property {string} name - Human-readable name
  * @property {string} status - 'live' | 'pilot' | 'coming_soon'
  * @property {boolean} requiresAccess - false = everyone; true = invite-only
  * @property {string} [docsUrl] - Optional docs link shown in denial messages
  */
 
 /**
- * Create a feature-access service.
- *
  * @param {Object} options
- * @param {Object} [options.pool] - pg Pool; null disables persistence (see failOpen)
- * @param {Object} [options.logger] - pino-like logger
- * @param {Object<string, FeatureConfig>} options.features - Keyed by command
- *   name (e.g. 'buyer-list'). Replaces any hardcoded feature registry.
- * @param {boolean} [options.failOpen] - When the DB is missing or errors,
- *   allow access (default true)
- * @param {{access?: string, log?: string}} [options.tables]
- * @param {Function} [options.buildNoAccessMessage] - Override the default
- *   denial message builder; receives (featureCommand, config)
+ * @param {Object} options.storage - slackline storage (app.storage or your own)
+ * @param {Object<string, FeatureConfig>} options.features - Keyed by command name
+ * @param {boolean} [options.failOpen] - Allow access when storage errors (default true)
+ * @param {Object} [options.logger]
+ * @param {Function} [options.buildNoAccessMessage] - Override the denial
+ *   message builder; receives (featureCommand, config)
  */
 export function createFeatureAccess({
-  pool = null,
-  logger: rawLogger,
+  storage,
   features = {},
   failOpen = true,
-  tables = {},
+  logger: rawLogger,
   buildNoAccessMessage: customNoAccessMessage,
 } = {}) {
-  const logger = normalizeLogger(rawLogger);
-  const accessTable = tables.access || 'public.feature_access';
-  const logTable = tables.log || 'public.feature_access_log';
-
-  for (const table of [accessTable, logTable]) {
-    if (!IDENTIFIER_RE.test(table)) {
-      throw new Error(`Invalid feature-access table name: ${table}`);
-    }
+  if (!storage) {
+    throw new Error('createFeatureAccess requires a storage (pass app.storage or memoryStorage())');
   }
 
+  const logger = normalizeLogger(rawLogger);
   const FEATURE_CONFIG = Object.freeze({ ...features });
 
-  /**
-   * Initialize feature access tables. Idempotent; prefer running the
-   * migration file instead.
-   */
-  async function initializeTables() {
-    if (!pool) {
-      logger.warn('No database pool, feature access control disabled');
-      return false;
-    }
-
+  async function logAccessEvent(eventType, featureKey, userId, userName, metadata = {}) {
     try {
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS ${accessTable} (
-          id SERIAL PRIMARY KEY,
-          feature_key VARCHAR(50) NOT NULL,
-          slack_user_id VARCHAR(50) NOT NULL,
-          slack_user_name VARCHAR(100),
-          granted_by_user_id VARCHAR(50),
-          granted_by_user_name VARCHAR(100),
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-          CONSTRAINT unique_feature_user UNIQUE (feature_key, slack_user_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS ${logTable} (
-          id SERIAL PRIMARY KEY,
-          event_type VARCHAR(50) NOT NULL,
-          feature_key VARCHAR(50) NOT NULL,
-          slack_user_id VARCHAR(50) NOT NULL,
-          slack_user_name VARCHAR(100),
-          target_user_id VARCHAR(50),
-          target_user_name VARCHAR(100),
-          channel_id VARCHAR(50),
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-          metadata JSONB DEFAULT '{}'
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_feature_access_lookup
-          ON ${accessTable}(feature_key, slack_user_id);
-      `);
-
-      logger.info('Feature access tables initialized');
-      return true;
+      const key = `${new Date().toISOString()}:${crypto.randomUUID()}`;
+      await storage.put(LOG_NS, key, {
+        eventType,
+        featureKey,
+        userId,
+        userName: userName || null,
+        targetUserId: metadata.targetUserId || null,
+        targetUserName: metadata.targetUserName || null,
+        at: new Date().toISOString(),
+        metadata,
+      });
     } catch (error) {
-      logger.error({ err: error }, 'Failed to initialize feature access tables');
-      return false;
+      logger.error({ err: error, eventType, featureKey }, 'Failed to log access event');
     }
   }
 
   /**
    * Check if a user has access to a feature.
-   * @param {string} featureCommand - The command name, e.g. 'buyer-list'
-   * @param {string} slackUserId - Slack user ID
-   * @returns {Promise<boolean>}
    */
   async function hasAccess(featureCommand, slackUserId) {
     const config = FEATURE_CONFIG[featureCommand];
@@ -132,31 +85,14 @@ export function createFeatureAccess({
       return false;
     }
 
-    // Live features - everyone has access
     if (!config.requiresAccess) {
       return true;
     }
 
-    if (!pool) {
-      logger.warn({ failOpen }, 'No database connection for access check');
-      return failOpen;
-    }
-
     try {
-      const result = await pool.query(
-        `SELECT 1 FROM ${accessTable} WHERE feature_key = $1 AND slack_user_id = $2`,
-        [config.key, slackUserId]
-      );
-
-      const allowed = result.rows.length > 0;
-
-      logger.debug({
-        featureCommand,
-        featureKey: config.key,
-        slackUserId,
-        hasAccess: allowed,
-      }, 'Access check performed');
-
+      const grant = await storage.get(ACCESS_NS, `${config.key}:${slackUserId}`);
+      const allowed = grant !== null;
+      logger.debug({ featureCommand, slackUserId, hasAccess: allowed }, 'Access check performed');
       return allowed;
     } catch (error) {
       logger.error({ err: error, featureCommand, slackUserId, failOpen }, 'Failed to check access');
@@ -170,47 +106,32 @@ export function createFeatureAccess({
    */
   async function grantAccess(featureCommand, targetUserId, targetUserName, grantedByUserId, grantedByUserName) {
     const config = FEATURE_CONFIG[featureCommand];
-
     if (!config) {
       return { success: false, error: 'Unknown feature' };
     }
 
-    if (!pool) {
-      return { success: false, error: 'Database not available' };
-    }
-
     try {
-      // Check if already has access
-      const existing = await pool.query(
-        `SELECT 1 FROM ${accessTable} WHERE feature_key = $1 AND slack_user_id = $2`,
-        [config.key, targetUserId]
-      );
-
-      if (existing.rows.length > 0) {
+      const key = `${config.key}:${targetUserId}`;
+      const existing = await storage.get(ACCESS_NS, key);
+      if (existing) {
         return { success: true, alreadyHadAccess: true };
       }
 
-      // Grant access
-      await pool.query(
-        `INSERT INTO ${accessTable}
-          (feature_key, slack_user_id, slack_user_name, granted_by_user_id, granted_by_user_name)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [config.key, targetUserId, targetUserName, grantedByUserId, grantedByUserName]
-      );
+      await storage.put(ACCESS_NS, key, {
+        featureKey: config.key,
+        userId: targetUserId,
+        userName: targetUserName || null,
+        grantedByUserId: grantedByUserId || null,
+        grantedByUserName: grantedByUserName || null,
+        grantedAt: new Date().toISOString(),
+      });
 
-      // Log the grant
       await logAccessEvent(AccessEventType.ACCESS_GRANTED, config.key, grantedByUserId, grantedByUserName, {
         targetUserId,
         targetUserName,
       });
 
-      logger.info({
-        featureCommand,
-        targetUserId,
-        targetUserName,
-        grantedByUserId,
-      }, 'Access granted');
-
+      logger.info({ featureCommand, targetUserId, grantedByUserId }, 'Access granted');
       return { success: true, alreadyHadAccess: false };
     } catch (error) {
       logger.error({ err: error, featureCommand, targetUserId }, 'Failed to grant access');
@@ -224,24 +145,16 @@ export function createFeatureAccess({
    */
   async function revokeAccess(featureCommand, targetUserId, revokedByUserId, revokedByUserName) {
     const config = FEATURE_CONFIG[featureCommand];
-
     if (!config) {
       return { success: false, error: 'Unknown feature' };
     }
 
-    if (!pool) {
-      return { success: false, error: 'Database not available' };
-    }
-
     try {
-      const result = await pool.query(
-        `DELETE FROM ${accessTable} WHERE feature_key = $1 AND slack_user_id = $2 RETURNING id`,
-        [config.key, targetUserId]
-      );
-
-      const hadAccess = result.rows.length > 0;
+      const key = `${config.key}:${targetUserId}`;
+      const hadAccess = (await storage.get(ACCESS_NS, key)) !== null;
 
       if (hadAccess) {
+        await storage.delete(ACCESS_NS, key);
         await logAccessEvent(AccessEventType.ACCESS_REVOKED, config.key, revokedByUserId, revokedByUserName, {
           targetUserId,
         });
@@ -256,29 +169,19 @@ export function createFeatureAccess({
 
   /**
    * Get all users with access to a feature.
-   * @returns {Promise<Array<{userId: string, userName: string, grantedBy: string, grantedAt: Date}>>}
+   * @returns {Promise<Array<{userId, userName, grantedBy, grantedAt}>>}
    */
   async function getAccessList(featureCommand) {
     const config = FEATURE_CONFIG[featureCommand];
-
-    if (!config || !pool) {
-      return [];
-    }
+    if (!config) return [];
 
     try {
-      const result = await pool.query(
-        `SELECT slack_user_id, slack_user_name, granted_by_user_name, created_at
-         FROM ${accessTable}
-         WHERE feature_key = $1
-         ORDER BY created_at ASC`,
-        [config.key]
-      );
-
-      return result.rows.map(row => ({
-        userId: row.slack_user_id,
-        userName: row.slack_user_name,
-        grantedBy: row.granted_by_user_name,
-        grantedAt: row.created_at,
+      const entries = await storage.list(ACCESS_NS, { prefix: `${config.key}:` });
+      return entries.map(({ value }) => ({
+        userId: value.userId,
+        userName: value.userName,
+        grantedBy: value.grantedByUserName,
+        grantedAt: value.grantedAt,
       }));
     } catch (error) {
       logger.error({ err: error, featureCommand }, 'Failed to get access list');
@@ -287,33 +190,7 @@ export function createFeatureAccess({
   }
 
   /**
-   * Log an access event for analytics.
-   */
-  async function logAccessEvent(eventType, featureKey, userId, userName, metadata = {}) {
-    if (!pool) return;
-
-    try {
-      await pool.query(
-        `INSERT INTO ${logTable}
-          (event_type, feature_key, slack_user_id, slack_user_name, target_user_id, target_user_name, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          eventType,
-          featureKey,
-          userId,
-          userName,
-          metadata.targetUserId || null,
-          metadata.targetUserName || null,
-          JSON.stringify(metadata),
-        ]
-      );
-    } catch (error) {
-      logger.error({ err: error, eventType, featureKey }, 'Failed to log access event');
-    }
-  }
-
-  /**
-   * Log when a user is denied access (for demand signals).
+   * Log when a user is denied access (demand signal).
    */
   async function logAccessDenied(featureCommand, userId, userName, channelId) {
     const config = FEATURE_CONFIG[featureCommand];
@@ -324,16 +201,41 @@ export function createFeatureAccess({
       featureStatus: config.status,
     });
 
-    logger.info({
-      featureCommand,
-      userId,
-      userName,
-    }, 'Access denied - logged for demand tracking');
+    logger.info({ featureCommand, userId }, 'Access denied - logged for demand tracking');
+  }
+
+  /**
+   * Aggregate the access log: per feature+event counts and unique users.
+   * Computed in JS over the log namespace — fine at bot scale.
+   */
+  async function getAccessAnalytics(days = 30) {
+    try {
+      const cutoff = Date.now() - days * 86_400_000;
+      const entries = await storage.list(LOG_NS);
+      const buckets = new Map();
+
+      for (const { value } of entries) {
+        if (new Date(value.at).getTime() < cutoff) continue;
+        const bucketKey = `${value.featureKey}|${value.eventType}`;
+        if (!buckets.has(bucketKey)) {
+          buckets.set(bucketKey, { featureKey: value.featureKey, eventType: value.eventType, eventCount: 0, users: new Set() });
+        }
+        const bucket = buckets.get(bucketKey);
+        bucket.eventCount += 1;
+        if (value.userId) bucket.users.add(value.userId);
+      }
+
+      return [...buckets.values()]
+        .map(({ users, ...rest }) => ({ ...rest, uniqueUsers: users.size }))
+        .sort((a, b) => a.featureKey.localeCompare(b.featureKey) || b.eventCount - a.eventCount);
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to get access analytics');
+      return null;
+    }
   }
 
   /**
    * Build the "no access" message for Slack.
-   * Friendly, educational, with an optional docs link.
    */
   function buildNoAccessMessage(featureCommand) {
     const config = FEATURE_CONFIG[featureCommand];
@@ -364,34 +266,22 @@ export function createFeatureAccess({
     if (config.docsUrl) {
       blocks.push({
         type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `<${config.docsUrl}|Learn more about this feature>`,
-          },
-        ],
+        elements: [{ type: 'mrkdwn', text: `<${config.docsUrl}|Learn more about this feature>` }],
       });
     }
 
     blocks.push(
-      {
-        type: 'divider',
-      },
+      { type: 'divider' },
       {
         type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `Interested in joining the ${statusDisplay}? Ask someone with access to run:\n\`/${featureCommand} add @you\``,
-          },
-        ],
+        elements: [{
+          type: 'mrkdwn',
+          text: `Interested in joining the ${statusDisplay}? Ask someone with access to run:\n\`/${featureCommand} add @you\``,
+        }],
       }
     );
 
-    return {
-      response_type: 'ephemeral',
-      blocks,
-    };
+    return { response_type: 'ephemeral', blocks };
   }
 
   /**
@@ -413,82 +303,33 @@ export function createFeatureAccess({
       blocks: [
         {
           type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `Added <@${targetUserId}> to *${featureName}*.`,
-          },
+          text: { type: 'mrkdwn', text: `Added <@${targetUserId}> to *${featureName}*.` },
         },
         {
           type: 'context',
-          elements: [
-            {
-              type: 'mrkdwn',
-              text: `They can now use \`/${featureCommand}\` to access this feature.`,
-            },
-          ],
+          elements: [{ type: 'mrkdwn', text: `They can now use \`/${featureCommand}\` to access this feature.` }],
         },
       ],
     };
   }
 
-  /**
-   * Get feature config by command name.
-   */
   function getFeatureConfig(featureCommand) {
     return FEATURE_CONFIG[featureCommand] || null;
   }
 
-  /**
-   * Get analytics on feature access.
-   * @param {number} days - Days to look back
-   */
-  async function getAccessAnalytics(days = 30) {
-    if (!pool) return null;
-
-    try {
-      const result = await pool.query(`
-        SELECT
-          feature_key,
-          event_type,
-          COUNT(*) as event_count,
-          COUNT(DISTINCT slack_user_id) as unique_users
-        FROM ${logTable}
-        WHERE created_at >= NOW() - INTERVAL '1 day' * $1
-        GROUP BY feature_key, event_type
-        ORDER BY feature_key, event_count DESC
-      `, [days]);
-
-      return result.rows;
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to get access analytics');
-      return null;
-    }
-  }
-
   return {
-    // Core functions
-    initializeTables,
     hasAccess,
     grantAccess,
     revokeAccess,
     getAccessList,
-
-    // Logging
     logAccessDenied,
     logAccessEvent,
     AccessEventType,
-
-    // Message builders
     buildNoAccessMessage,
     buildAccessGrantedMessage,
-
-    // Utilities
     extractUserId,
     getFeatureConfig,
     getAccessAnalytics,
-
-    // Config
     features: FEATURE_CONFIG,
   };
 }
-

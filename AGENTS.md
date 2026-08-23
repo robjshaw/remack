@@ -26,9 +26,11 @@ createApp({
     clientId, clientSecret, stateSecret,   // all required
     scopes,           // required; MUST match your app manifest
     userScopes,       // optional
-    store,            // required; { get, set, delete } — see ext/installation-store
+    store,            // OPTIONAL { get, set, delete } override; installations
+                      //   persist in `storage` by default
     redirectUri,      // optional explicit redirect_uri
   },
+  storage,            // namespaced KV (see Storage below); default memoryStorage()
   routes,             // dir (string|URL) for fs discovery, RouteDef[], or mixed array
   context,            // object injected into every args (your services/pools)
   onError,            // (error, args) => ackValue|void — app error boundary
@@ -37,15 +39,36 @@ createApp({
   paths,              // { events:'/events', install:'/install', redirect:'/oauth_redirect' }
   ignoreEventRetries, // default true: drop x-slack-retry-num duplicates
   genericMessage,     // default 'Something went wrong. Please try again.'
-}) => { fetch, client /* single-token client or null */, ready /* routes loaded */, idle() }
+}) => { fetch, client /* single-token client or null */, storage, ready /* routes loaded */, idle() }
 ```
 
 Mode: `botToken` present → single-token. Else `oauth` → per-request token
-lookup via `store.get({teamId, enterpriseId, isEnterpriseInstall})`; unknown
-workspace acks 200 (never 500); `app_uninstalled`/`tokens_revoked` events
-auto-call `store.delete`. OAuth endpoints: GET `paths.install` (302 to Slack,
-HMAC state + cookie CSRF, 10-min expiry), GET `paths.redirect` (code exchange
-via form-encoded `oauth.v2.access`, then `store.set(installation)`).
+lookup (installations namespace of `storage`, or your `oauth.store`
+override); unknown workspace acks 200 (never 500);
+`app_uninstalled`/`tokens_revoked` events auto-delete the installation.
+OAuth endpoints: GET `paths.install` (302 to Slack, HMAC state + cookie
+CSRF, 10-min expiry), GET `paths.redirect` (code exchange via form-encoded
+`oauth.v2.access`, then the installation is stored). OAuth mode on default
+in-memory storage logs a warning: installations vanish on restart.
+
+## Storage (the one persistence primitive)
+
+```js
+{
+  get(ns, key)                     // → value | null
+  put(ns, key, value)              // value: JSON-serializable
+  delete(ns, key)
+  list(ns, {prefix?, limit?} = {}) // → [{key, value}] sorted by key
+}
+```
+
+Implementations: `memoryStorage()` (core, default), `fileStorage(path)`
+(core; one JSON file, atomic writes, single-instance),
+`postgresStorage({pool, table?})` (`ext/postgres-storage.js`; one JSONB
+table, `migrations/001_slackline_kv.sql`, pool injected — pg never
+imported). Implement the same four methods to back it with anything else
+(Redis, DynamoDB, Workers KV). Namespaces in use: `installations`,
+`feature-access`, `feature-access-log`, `engagement`, `analytics`.
 
 ## Route modules
 
@@ -182,16 +205,16 @@ is always the raw shape.)
 - **Alerting never throws** (`ext/ops-alert`) — a failed alert must not fail
   the job that raised it.
 
-## ext/* modules (all optional, zero-dep, pool injected — never `pg` imported)
+## ext/* modules (all optional, zero-dep)
 
 | Import | Exports | Notes |
 |---|---|---|
-| `ext/installation-store.js` | `createInstallationStore({pool, table?})` → `{get,set,delete,list}` | migrations/001 |
+| `ext/postgres-storage.js` | `postgresStorage({pool, table?})` | storage adapter; migrations/001_slackline_kv.sql |
 | `ext/ops-alert.js` | `createOpsAlert({token?, channel?, client?})` → `{sendOpsAlert}` | never throws |
 | `ext/file-delivery.js` | `deliverFileToUser(client, {userId, content, filename, ...})` | missing_scope fallback |
 | `ext/plan-block.js` | `buildPlanBlock, createSteps, updateStepProgress, buildCompletionBlocks` | pure Block Kit |
-| `ext/feature-access.js` | `createFeatureAccess({pool, features, failOpen?, tables?})` | migrations/003; failOpen default true |
-| `ext/engagement-tracker.js` | `createEngagementTracker({pool, eventTypes?, tables?})` | migrations/002; `defineTracker` for app-specific track maps |
+| `ext/feature-access.js` | `createFeatureAccess({storage, features, failOpen?})` | pass `app.storage`; failOpen default true |
+| `ext/engagement-tracker.js` | `createEngagementTracker({storage, eventTypes?})` | pass `app.storage`; aggregates computed in JS — bot-scale by design |
 
 ## Testing your bot
 

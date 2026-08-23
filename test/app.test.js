@@ -305,6 +305,39 @@ test('oauth mode: unknown workspace acks 200; uninstall event deletes installati
   assert.equal(deleted[0].teamId, 'T111');
 });
 
+test('oauth mode works without a store: installations live in app storage', async () => {
+  const handled = [];
+  const app = createApp({
+    signingSecret: TEST_SIGNING_SECRET,
+    oauth: {
+      clientId: 'id', clientSecret: 'secret', stateSecret: 'state',
+      scopes: ['chat:write'],
+    },
+    routes: [route('action', 'open_settings', {
+      default: async ({ client, teamId }) => { handled.push({ token: client.token, teamId }); },
+    })],
+    logger: fakeLogger(),
+  });
+
+  // Unknown workspace → acked, handler not run
+  const before = await app.fetch(signedRequest({ body: interactivityBody(payloads.blockActions) }));
+  assert.equal(before.status, 200);
+  assert.equal(handled.length, 0);
+
+  // Simulate a completed install by writing to the default storage
+  const { installationsFrom } = await import('../lib/installations.js');
+  await installationsFrom(app.storage).set({
+    team: { id: 'T111' }, enterprise: null, isEnterpriseInstall: false,
+    bot: { token: 'xoxb-installed' },
+  });
+
+  const after = await app.fetch(signedRequest({ body: interactivityBody(payloads.blockActions) }));
+  assert.equal(after.status, 200);
+  assert.equal(handled.length, 1);
+  assert.equal(handled[0].token, 'xoxb-installed');
+  assert.equal(handled[0].teamId, 'T111');
+});
+
 test('createApp validates configuration early', () => {
   assert.throws(() => createApp({ botToken: 'x', signingSecret: undefined }), /signingSecret/);
   assert.throws(() => createApp({ signingSecret: 's', botToken: undefined, oauth: undefined }), /botToken.*oauth/);
