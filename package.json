@@ -1,13 +1,20 @@
 {
-  "name": "@tbp/boltkit",
-  "version": "0.1.0",
-  "description": "Batteries-included toolkit for building Slack bots on @slack/bolt: dual-mode auth bootstrap, Postgres installation store, handler registrar, central error handling, engagement analytics, feature gating.",
-  "type": "commonjs",
-  "main": "lib/index.js",
+  "name": "@tbp/slackline",
+  "version": "0.2.0",
+  "description": "Zero-dependency, Remix-shaped Slack framework: web-standard Request/Response core, file-based route modules with colocated loader/render/action, error boundaries, and composable extras.",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./node": "./lib/node.js",
+    "./helpers": "./lib/helpers.js",
+    "./ext/*": "./ext/*.js"
+  },
   "files": [
     "lib",
+    "ext",
     "migrations",
-    "README.md"
+    "README.md",
+    "AGENTS.md"
   ],
   "private": true,
   "license": "UNLICENSED",
@@ -16,21 +23,6 @@
   },
   "scripts": {
     "test": "node --test",
-    "example": "node examples/minimal-bot/app.js"
-  },
-  "dependencies": {
-    "@slack/bolt": "^4.4.0",
-    "@slack/web-api": "^7.10.0"
-  },
-  "peerDependencies": {
-    "pg": ">=8"
-  },
-  "peerDependenciesMeta": {
-    "pg": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
-    "dotenv": "^17.2.3"
+    "example": "node examples/route-bot/app.js"
   }
 }

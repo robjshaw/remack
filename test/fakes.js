@@ -1,12 +1,12 @@
-'use strict';
+/** Shared test doubles for slackline tests. */
 
-/** Shared test doubles for boltkit tests. */
+import { createHmac } from 'node:crypto';
 
 /**
  * Fake pg pool: records query(text, params) calls and returns scripted rows.
  * Pass an array of results (consumed in order) or a function (text, params) => {rows}.
  */
-function fakePool(script = []) {
+export function fakePool(script = []) {
   const calls = [];
   const scriptFn = typeof script === 'function' ? script : null;
   const queue = scriptFn ? null : [...script];
@@ -23,77 +23,8 @@ function fakePool(script = []) {
   };
 }
 
-/**
- * Fake Bolt app: records registrations per kind and can dispatch a payload
- * to every matching listener (like Bolt runs all matching listeners).
- */
-function fakeBoltApp() {
-  const registrations = { command: [], action: [], view: [], event: [], shortcut: [], options: [], message: [], error: [] };
-
-  const app = {};
-  for (const kind of Object.keys(registrations)) {
-    if (kind === 'error') continue;
-    app[kind] = (id, ...middleware) => {
-      registrations[kind].push({ id, handlers: middleware });
-    };
-  }
-  app.error = (handler) => registrations.error.push({ handlers: [handler] });
-
-  function matches(registeredId, id) {
-    if (registeredId instanceof RegExp) return registeredId.test(id);
-    return registeredId === id;
-  }
-
-  /** Invoke all listeners of `kind` whose id matches, with the given args. */
-  async function dispatch(kind, id, args) {
-    const matching = registrations[kind].filter((r) => matches(r.id, id));
-    for (const reg of matching) {
-      // Run the middleware chain: each gets args plus next()
-      let index = 0;
-      const run = async () => {
-        const handler = reg.handlers[index++];
-        if (!handler) return;
-        await handler({ ...args, next: run });
-      };
-      await run();
-    }
-    return matching.length;
-  }
-
-  return { app, registrations, dispatch };
-}
-
-/** Fake WebClient with recordable nested method stubs. */
-function fakeWebClient(overrides = {}) {
-  const calls = [];
-
-  function stub(path, defaultResult) {
-    return async (params) => {
-      calls.push({ method: path, params });
-      const override = overrides[path];
-      if (override instanceof Error) throw override;
-      if (typeof override === 'function') return override(params);
-      return override ?? defaultResult;
-    };
-  }
-
-  return {
-    calls,
-    conversations: { open: stub('conversations.open', { channel: { id: 'D_FAKE' } }) },
-    files: { uploadV2: stub('files.uploadV2', { ok: true }) },
-    chat: {
-      postMessage: stub('chat.postMessage', { ok: true }),
-      postEphemeral: stub('chat.postEphemeral', { ok: true }),
-    },
-    users: {
-      lookupByEmail: stub('users.lookupByEmail', { ok: true, user: { id: 'U_FAKE', real_name: 'Fake User', profile: {} } }),
-      info: stub('users.info', { ok: true, user: { id: 'U_FAKE', real_name: 'Fake User', profile: {} } }),
-    },
-  };
-}
-
 /** Silent logger that records calls. */
-function fakeLogger() {
+export function fakeLogger() {
   const entries = [];
   const make = (level) => (objOrMsg, msg) => entries.push({ level, objOrMsg, msg });
   return {
@@ -106,4 +37,94 @@ function fakeLogger() {
   };
 }
 
-module.exports = { fakePool, fakeBoltApp, fakeWebClient, fakeLogger };
+/**
+ * Fake global-fetch replacement: records requests and returns scripted
+ * responses. Script entries may be:
+ *   - a function (url, init) => Response | object (object → JSON 200)
+ *   - an object → JSON 200 response
+ *   - a Response
+ * Pass an array (consumed in order) or a single function used for all calls.
+ */
+export function fakeFetch(script = []) {
+  const calls = [];
+  const scriptFn = typeof script === 'function' ? script : null;
+  const queue = scriptFn ? null : [...script];
+
+  const fetchFn = async (url, init = {}) => {
+    const call = { url: String(url), init };
+    // Preserve a readable copy of the body for assertions
+    if (typeof init.body === 'string') call.body = init.body;
+    else if (init.body instanceof Uint8Array) call.body = init.body;
+    calls.push(call);
+
+    let entry = scriptFn ? scriptFn(url, init) : (queue.length ? queue.shift() : { ok: true });
+    if (typeof entry === 'function') entry = entry(url, init);
+    if (entry instanceof Error) throw entry;
+    if (entry instanceof Response) return entry;
+    return new Response(JSON.stringify(entry), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  fetchFn.calls = calls;
+  return fetchFn;
+}
+
+export const TEST_SIGNING_SECRET = 'test-signing-secret';
+
+/**
+ * Build a correctly-signed Slack HTTP Request for app.fetch().
+ *
+ * @param {Object} options
+ * @param {string} [options.path] - Request path (default '/events')
+ * @param {string|URLSearchParams|Object} options.body - Raw body string, form
+ *   params, or an object (sent as JSON)
+ * @param {string} [options.contentType] - Defaults by body type
+ * @param {string} [options.signingSecret]
+ * @param {number} [options.timestamp] - Unix seconds (default: now)
+ * @param {Object} [options.headers] - Extra headers
+ * @returns {Request}
+ */
+export function signedRequest({
+  path = '/events',
+  body,
+  contentType,
+  signingSecret = TEST_SIGNING_SECRET,
+  timestamp = Math.floor(Date.now() / 1000),
+  headers = {},
+} = {}) {
+  let rawBody;
+  let resolvedContentType = contentType;
+
+  if (typeof body === 'string') {
+    rawBody = body;
+    resolvedContentType ||= 'application/x-www-form-urlencoded';
+  } else if (body instanceof URLSearchParams) {
+    rawBody = body.toString();
+    resolvedContentType ||= 'application/x-www-form-urlencoded';
+  } else {
+    rawBody = JSON.stringify(body);
+    resolvedContentType ||= 'application/json';
+  }
+
+  const signature = 'v0=' + createHmac('sha256', signingSecret)
+    .update(`v0:${timestamp}:${rawBody}`)
+    .digest('hex');
+
+  return new Request(`https://bot.test${path}`, {
+    method: 'POST',
+    headers: {
+      'content-type': resolvedContentType,
+      'x-slack-request-timestamp': String(timestamp),
+      'x-slack-signature': signature,
+      ...headers,
+    },
+    body: rawBody,
+  });
+}
+
+/** Form-encode an interactivity payload the way Slack does. */
+export function interactivityBody(payload) {
+  return new URLSearchParams({ payload: JSON.stringify(payload) });
+}
