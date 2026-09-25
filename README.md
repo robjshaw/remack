@@ -73,7 +73,8 @@ Point every Slack Request URL (commands, interactivity, events, options) at
 
 | Command | Does |
 |---|---|
-| `slackline create <dir>` | Scaffold a bot (`--mode token\|oauth`) |
+| `slackline create <dir>` | Scaffold a bot (`--mode token\|oauth`, `--target apps-script`) |
+| `slackline build:apps-script` | Bundle slackline into one script for Google Apps Script |
 | `slackline dev [entry]` | Run with `--watch`; env layered process → `.env` → active profile |
 | `slackline routes` | Show the route table with each module's exports |
 | `slackline manifest` | Slack App Manifest derived from `routes/` (`--url`, `--oauth`, `--out`) |
@@ -82,6 +83,36 @@ Point every Slack Request URL (commands, interactivity, events, options) at
 The manifest is the onboarding shortcut: your route files already declare the
 commands, events, and interactivity — `manifest` turns them into the exact
 JSON Slack's "Create from manifest" screen wants, right URLs included.
+
+## Google Apps Script: no server at all
+
+```
+slackline create my-bot --target apps-script
+```
+
+gives you `Code.js` + `slackline.js` to paste into script.google.com (or
+push with clasp). Deploy as a web app, point Slack at it, done: no hosting,
+free on any Google account. (No Node? Copy `dist/apps-script/slackline.js`
+from this repo instead of running the CLI.)
+
+```js
+function routes() {
+  return [Slackline.route('command', '/ping', { default: () => 'pong' })];
+}
+let app_;
+function app() { return app_ || (app_ = Slackline.createAppsScriptApp({ routes: routes() })); }
+function doPost(e) { return app().doPost(e); }
+```
+
+The trade-offs are real, so the scaffold's README spells them out:
+- **Weaker request auth.** Apps Script can't read headers, so the request
+  signature can't be checked. Requests are authenticated with Slack's
+  verification token plus a secret `?key=` on the URL instead.
+- **Synchronous handlers.** No async/await, and no `defer()`.
+- **Everything runs inside Slack's 3-second window**, cold start included.
+
+Good for internal tools and prototypes. For anything sensitive, use the
+Node or serverless targets.
 
 ## Env vars
 

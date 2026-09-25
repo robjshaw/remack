@@ -230,6 +230,38 @@ const app = createApp({ waitUntil, ... });
 tracked by `idle()`). The core imports `node:fs`/`node:http` via
 `fileStorage`/`serve`, so Workers needs the `nodejs_compat` flag.
 
+## Google Apps Script (`lib/apps-script.js`)
+
+A serverless target on any Google account: `Slackline.createAppsScriptApp`
+in a script deployed as a web app (execute as me, access Anyone). Same
+route modules, args, ack model and boundary chain as `createApp`, with
+constraints that are the platform's, not bugs:
+
+| | `createApp` | `createAppsScriptApp` |
+|---|---|---|
+| Request auth | HMAC signature (`x-slack-signature`) | **No headers on Apps Script** → body verification token (Slack-deprecated, still sent) + secret `?key=` (≥16 chars) on the Request URL, both required, constant-time compared. No replay protection. |
+| Handlers | sync or async | **sync only** — a returned Promise is an error (it could never settle before `doPost` returns) |
+| Client | `createClient` (fetch, async) | `createGasClient` (UrlFetchApp, returns results directly; same dot-access, `SlackApiError`, 429 Retry-After) |
+| Events | acked first, handler post-ack | handler runs **before** the ack (3s budget incl. cold start); return ignored |
+| `defer()` / `respond()` | post-ack | `defer` throws (nothing runs after `return`); `respond` posts inline |
+| Event retries | `x-slack-retry-num` header | no headers → deduped by `event_id` in CacheService (`dedupeSeconds`, default 3600) |
+| Config | options / `env` | options, else Script Properties `SLACK_VERIFICATION_TOKEN`, `SLACK_URL_KEY`, `SLACK_BOT_TOKEN` |
+| Crash outside the boundary | logged, rethrown | logged (`outcome:'crashed'`), empty ack — never Apps Script's HTML error page |
+
+Single workspace (bot token) only. Logging is the same summary line per
+request (`outcome`, `ackMs`, `requestId` from `Utilities.getUuid`), visible
+under Executions. `requestId`/`log` are on args as in core.
+
+Distribution: Apps Script has no modules, so `slackline build:apps-script`
+bundles `lib/apps-script.js` and its imports into one script defining a
+global `Slackline` (`lib/cli/bundle.js` — a tiny bundler that only accepts
+lib/'s own import/export style and refuses anything else). A prebuilt copy
+lives at `dist/apps-script/slackline.js` for no-Node setups; a test fails if
+it drifts from lib/ (`npm run build:apps-script`). Anything lib/apps-script.js
+imports must avoid fetch, URLSearchParams, URL, TextEncoder, crypto,
+process, Buffer and timers at runtime — a test runs the bundle on a bare V8
+context without them.
+
 ## Payload cheat-sheet (where things live per wire shape)
 
 | | command (form) | block_actions | view_submission | event_callback |
@@ -283,6 +315,13 @@ is always the raw shape.)
   (file: dep on this repo), app.js, routes/ with working command/action/
   view/event examples, .env.example, README. Refuses to overwrite an
   existing package.json.
+- `create <dir> --target apps-script [--name]` — Google Apps Script
+  project: Code.js (command/event/home/action examples + `doPost` + a
+  `setup()` that creates the URL key), slackline.js (the bundle),
+  appsscript.json (V8, web app), slack-manifest.json, .claspignore, README
+  with the browser-only and clasp paths. Refuses to overwrite a Code.js;
+  `--mode oauth` is rejected.
+- `build:apps-script [--out slackline.js]` — write the Apps Script bundle.
 - `dev [entry] [--no-watch]` — spawns `node --watch app.js` with env layered
   process env → `./.env` (built-in parser) → active profile. Fails fast with
   guidance when SLACK_SIGNING_SECRET is missing.
