@@ -92,8 +92,39 @@ JSON Slack's "Create from manifest" screen wants, right URLs included.
 | `SLACK_ALERTS_CHANNEL` | `ext/ops-alert` destination |
 | `SLACKLINE_DEBUG` | Debug output from the fallback logger |
 
-Env is only a default for explicit options. slackline never reads
-`DATABASE_URL` and never opens connections.
+Env is only a default for explicit options — pass `createApp({ env })` to
+read from somewhere other than `process.env` (e.g. Workers bindings). An
+explicit `oauth` config always means OAuth mode, even if `SLACK_BOT_TOKEN`
+happens to be set. slackline never reads `DATABASE_URL` and never opens
+connections.
+
+## Hosting
+
+The app is `app.fetch(request, ...platformArgs)`. Long-running Node:
+`serve()`. Serverless: post-ack work (events, `defer`) is handed to the
+platform's `waitUntil` so it isn't frozen after the response —
+
+```js
+export default { fetch: (req, env, ctx) => app.fetch(req, env, ctx) };  // Workers: ctx.waitUntil picked up
+createApp({ waitUntil, ... });                                          // Vercel: from @vercel/functions
+```
+
+## Logging
+
+Every request gets a `requestId` and `args.log`, a logger bound to
+`{requestId, kind, id, teamId, userId}`, and ends with one line:
+`Slack request handled {status, outcome, ackMs}` — or a `Slow Slack ack`
+warning past 2s, before Slack's 3s cutoff bites.
+
+## Several apps, one process
+
+```js
+const sales = createApp({ namespace: 'sales', storage, oauth: salesOAuth, signingSecret: SALES_SECRET });
+const support = createApp({ namespace: 'support', storage, oauth: supportOAuth, signingSecret: SUPPORT_SECRET });
+```
+
+`namespace` scopes storage (`sales:installations`) and tags logs, so apps
+can share one Postgres table without colliding.
 
 ## Storage — portable by default
 

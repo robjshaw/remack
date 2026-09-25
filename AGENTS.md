@@ -21,7 +21,9 @@ the complete reference; the README is the tour.
 ```js
 createApp({
   signingSecret,      // required; default env SLACK_SIGNING_SECRET
-  botToken,           // single-token mode; default env SLACK_BOT_TOKEN
+  env,                // where env defaults come from; default process.env (or {})
+  botToken,           // single-token mode; default env SLACK_BOT_TOKEN — but
+                      //   ONLY when no `oauth` is passed
   oauth: {            // multi-workspace mode (used when botToken is absent)
     clientId, clientSecret, stateSecret,   // all required
     scopes,           // required; MUST match your app manifest
@@ -31,6 +33,10 @@ createApp({
     redirectUri,      // optional explicit redirect_uri
   },
   storage,            // namespaced KV (see Storage below); default memoryStorage()
+  namespace,          // [A-Za-z0-9_.-]+: prefixes this app's storage namespaces
+                      //   ('sales:installations') and adds {app} to every log line
+  waitUntil,          // (promise) => void for post-ack work on serverless
+                      //   (Vercel); a waitUntil on fetch's extra args wins
   routes,             // dir (string|URL) for fs discovery, RouteDef[], or mixed array
   context,            // object injected into every args (your services/pools)
   onError,            // (error, args) => ackValue|void — app error boundary
@@ -51,6 +57,10 @@ CSRF, 10-min expiry), GET `paths.redirect` (code exchange via form-encoded
 `oauth.v2.access`, then the installation is stored). OAuth mode on default
 in-memory storage logs a warning: installations vanish on restart.
 
+Several apps in one process: give each its own `namespace` (and explicit
+secrets or its own `env`), mount each `app.fetch` at its own path. Apps
+sharing one `storage` without a namespace share its `installations`.
+
 ## Storage (the one persistence primitive)
 
 ```js
@@ -68,7 +78,10 @@ Implementations: `memoryStorage()` (core, default), `fileStorage(path)`
 table, `migrations/001_slackline_kv.sql`, pool injected — pg never
 imported). Implement the same four methods to back it with anything else
 (Redis, DynamoDB, Workers KV). Namespaces in use: `installations`,
-`feature-access`, `feature-access-log`, `engagement`, `analytics`.
+`feature-access`, `feature-access-log`, `engagement`, `analytics` — each
+becomes `{namespace}:{ns}` under `createApp({namespace})`, and `app.storage`
+is that scoped view (pass it to ext modules). `namespacedStorage(storage,
+prefix)` does the same scoping by hand.
 
 ## Route modules
 
@@ -87,6 +100,8 @@ A module must export `default` or `render`.
 
 ```js
 {
+  requestId,     // incoming x-request-id, else a random UUID
+  log,           // logger bound to {requestId, kind, id, teamId, userId[, app]}
   kind,          // 'command'|'action'|'view'|'view_closed'|'shortcut'|'options'|'event'
   id,            // '/report' | action_id | callback_id | event type
   payload,       // FULL parsed body — the raw Slack payload, nothing hidden
@@ -135,7 +150,28 @@ return → falls through) → default: structured log `{kind,id,userId,teamId,ph
 fire-and-forget `opsAlert` (skipped for UserError), user notification
 (commands: in the ack; others: via `response_url`, else
 `chat.postEphemeral`), always 200. Post-ack (`defer`, events) errors use the
-same chain with `phase:'deferred'`.
+same chain with `phase:'deferred'`. Boundary logs go through the request
+logger, so they carry the `requestId`.
+
+## Logging
+
+Bring any pino-like logger (`debug/info/warn/error(obj, msg)`, optional
+`child`); otherwise a console fallback (debug only with `SLACKLINE_DEBUG`).
+Per `/events` request:
+
+- `args.log` — child logger bound to `requestId`, `kind`, `id`, `teamId`,
+  `userId` (and `app` with a namespace). Use it in handlers.
+- One summary line: `Slack request handled` `{status, outcome, ackMs}` at
+  info, or `Slow Slack ack` at warn when `ackMs > 2000` (Slack gives up at
+  3000). `outcome`: `ok | error | unhandled | unknown_workspace |
+  retry_dropped | url_verification | rejected | bad_request`. A throw
+  outside the route boundary (e.g. the installation store is down) logs
+  `outcome:'crashed'` at error with the `requestId`, then propagates.
+- `Slack continuation finished` `{durationMs, continuations, failed}` once
+  a request's post-ack work (events, `defer`) has all settled.
+
+`childLogger(logger, bindings)` is exported for the same binding outside
+requests (works on loggers without `child`).
 
 ## Client
 
@@ -168,6 +204,31 @@ raw body. A pre-consumed stream raises a descriptive error instead of
 mysterious 401s. Express strips the mount prefix, so default paths work at
 any mount point. Other runtimes (Bun/Deno/Workers): pass `app.fetch`
 directly to the platform's fetch server.
+
+## Hosting & post-ack work
+
+Events and `defer()` run AFTER the response. On a long-running server that
+just works (`serve({onIdle: app.idle})` drains it on shutdown). Serverless
+platforms freeze the invocation once the response is sent, so the work
+must be handed to the platform's `waitUntil`:
+
+```js
+// Cloudflare Workers — fetch(request, env, ctx): ctx.waitUntil is found automatically
+export default { fetch: (request, env, ctx) => getApp(env).fetch(request, env, ctx) };
+// getApp(env) = memoized createApp({ env, ... }) — Workers bindings arrive per request
+
+// Netlify — handler(request, context): context.waitUntil is found automatically
+export default (request, context) => app.fetch(request, context);
+
+// Vercel — no ctx arg; pass the global one
+import { waitUntil } from '@vercel/functions';
+const app = createApp({ waitUntil, ... });
+```
+
+`app.fetch(request, ...platformArgs)` uses the first extra arg with a
+`waitUntil` method, else `createApp({waitUntil})`, else nothing (in-process,
+tracked by `idle()`). The core imports `node:fs`/`node:http` via
+`fileStorage`/`serve`, so Workers needs the `nodejs_compat` flag.
 
 ## Payload cheat-sheet (where things live per wire shape)
 

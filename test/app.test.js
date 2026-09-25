@@ -176,7 +176,7 @@ test('unmatched anything still acks 200 (the catch-all lesson)', async () => {
   const command = await app.fetch(signedRequest({ body: payloads.slashCommandForm }));
   assert.equal(command.status, 200);
 
-  const acked = logger.entries.filter((e) => /Unhandled Slack request acknowledged/.test(e.msg));
+  const acked = logger.entries.filter((e) => e.msg === 'Slack request handled' && e.objOrMsg.outcome === 'unhandled');
   assert.equal(acked.length, 4);
 });
 

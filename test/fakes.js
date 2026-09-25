@@ -23,17 +23,21 @@ export function fakePool(script = []) {
   };
 }
 
-/** Silent logger that records calls. */
-export function fakeLogger() {
-  const entries = [];
-  const make = (level) => (objOrMsg, msg) => entries.push({ level, objOrMsg, msg });
+/**
+ * Silent logger that records calls. Children record into the same
+ * `entries`, with their bindings merged into objOrMsg (pino semantics).
+ */
+export function fakeLogger(entries = [], bindings = {}) {
+  const make = (level) => (objOrMsg, msg) => entries.push(typeof objOrMsg === 'string'
+    ? { level, objOrMsg: Object.keys(bindings).length ? { ...bindings } : objOrMsg, msg: msg ?? objOrMsg }
+    : { level, objOrMsg: { ...bindings, ...(objOrMsg || {}) }, msg });
   return {
     entries,
     debug: make('debug'),
     info: make('info'),
     warn: make('warn'),
     error: make('error'),
-    child: () => fakeLogger(),
+    child: (more = {}) => fakeLogger(entries, { ...bindings, ...more }),
   };
 }
 
