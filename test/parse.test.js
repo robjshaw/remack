@@ -97,7 +97,34 @@ test('event_callback → event with retry headers surfaced', () => {
 
 test('url_verification → challenge echo shape', () => {
   const req = parseJson(payloads.urlVerification);
-  assert.deepEqual(req, { kind: 'url_verification', challenge: payloads.urlVerification.challenge });
+  assert.deepEqual(req, {
+    kind: 'url_verification',
+    challenge: payloads.urlVerification.challenge,
+    token: payloads.urlVerification.token,
+  });
+});
+
+test('form decoding matches URLSearchParams without depending on it', () => {
+  const params = new URLSearchParams();
+  params.append('command', '/report');
+  params.append('text', 'a+b & c=d ✓ 100% "quoted"');
+  params.append('empty', '');
+  params.append('dup', 'first');
+  params.append('dup', 'last');
+  const req = parseForm(params);
+  assert.equal(req.payload.text, 'a+b & c=d ✓ 100% "quoted"');
+  assert.equal(req.payload.empty, '');
+  assert.equal(req.payload.dup, 'last', 'Object.fromEntries semantics: last duplicate wins');
+
+  const bare = parseSlackRequest({ contentType: FORM, rawBody: 'command=%2Fx&flag&text=hi+there' });
+  assert.equal(bare.payload.flag, '');
+  assert.equal(bare.payload.text, 'hi there');
+
+  const twoPayloads = parseSlackRequest({
+    contentType: FORM,
+    rawBody: `payload=${encodeURIComponent(JSON.stringify(payloads.blockActions))}&payload=${encodeURIComponent('{"type":"bogus"}')}`,
+  });
+  assert.equal(twoPayloads.kind, 'action', 'first payload wins, like URLSearchParams.get');
 });
 
 test('content-type parameters are tolerated', () => {
