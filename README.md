@@ -1,6 +1,6 @@
 # remack
 
-A zero-dependency Slack bot framework for Node 22 and up. Each Slack command, button, modal, event, or workflow step lives in its own file under `routes/`, and whatever your handler returns becomes the HTTP response to Slack.
+A zero-dependency Slack bot framework for Node 22 and up. The name comes from Remix + ack (pronounced "ree-mack"): each Slack command, button, modal, event, or workflow step lives in its own file under `routes/`, and the response your handler returns is the acknowledgement to Slack.
 
 remack has no runtime dependencies and needs no database to start. Request verification uses WebCrypto, Slack Web API calls use `fetch`, OAuth is built in, and state sits in a four-method key-value store that defaults to memory. The core app is a standard `(Request) => Response` fetch handler, so it runs on Node, Cloud Run, Cloudflare Workers, Netlify, or Vercel.
 
