@@ -6,7 +6,7 @@ import { createOpsAlert } from '../ext/ops-alert.js';
 import { SlackApiError } from '../lib/client.js';
 import { fakeLogger } from './fakes.js';
 
-function fakeSlacklineClient(overrides = {}) {
+function fakeRemackClient(overrides = {}) {
   const calls = [];
   const record = (name, defaultResult) => async (params) => {
     calls.push({ name, params });
@@ -25,7 +25,7 @@ function fakeSlacklineClient(overrides = {}) {
 }
 
 test('deliverFileToUser uploads via the client upload flow', async () => {
-  const client = fakeSlacklineClient();
+  const client = fakeRemackClient();
   const result = await deliverFileToUser(client, {
     userId: 'U1', content: 'a,b\n1,2', filename: 'export.csv',
     title: 'Export', initialComment: 'Here', logger: fakeLogger(),
@@ -38,7 +38,7 @@ test('deliverFileToUser uploads via the client upload flow', async () => {
 });
 
 test('missing_scope falls back to inline chunked DM', async () => {
-  const client = fakeSlacklineClient({
+  const client = fakeRemackClient({
     'files.upload': new SlackApiError('files.getUploadURLExternal', { error: 'missing_scope' }),
   });
 
@@ -55,7 +55,7 @@ test('missing_scope falls back to inline chunked DM', async () => {
 });
 
 test('non-scope errors propagate; unopenable DM throws', async () => {
-  const failing = fakeSlacklineClient({
+  const failing = fakeRemackClient({
     'files.upload': new SlackApiError('files.completeUploadExternal', { error: 'ratelimited' }),
   });
   await assert.rejects(
@@ -63,7 +63,7 @@ test('non-scope errors propagate; unopenable DM throws', async () => {
     /ratelimited/
   );
 
-  const noDm = fakeSlacklineClient({ 'conversations.open': { channel: {} } });
+  const noDm = fakeRemackClient({ 'conversations.open': { channel: {} } });
   await assert.rejects(
     () => deliverFileToUser(noDm, { userId: 'U1', content: 'x', filename: 'f.csv', logger: fakeLogger() }),
     /Could not open DM channel/
@@ -71,7 +71,7 @@ test('non-scope errors propagate; unopenable DM throws', async () => {
 });
 
 test('ops alert posts to the channel and never throws', async () => {
-  const client = fakeSlacklineClient();
+  const client = fakeRemackClient();
   const { sendOpsAlert } = createOpsAlert({ client, channel: '#ops', logger: fakeLogger() });
 
   const sent = await sendOpsAlert('Job failed', {
@@ -92,7 +92,7 @@ test('ops alert degrades to false when unconfigured or Slack fails', async () =>
   assert.equal(await unconfigured.sendOpsAlert('x'), false);
 
   const failing = createOpsAlert({
-    client: fakeSlacklineClient({ 'chat.postMessage': new Error('network down') }),
+    client: fakeRemackClient({ 'chat.postMessage': new Error('network down') }),
     channel: '#ops',
     logger: fakeLogger(),
   });

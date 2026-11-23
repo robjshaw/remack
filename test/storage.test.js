@@ -56,7 +56,7 @@ let fileDir;
 contractTests(
   'fileStorage',
   async () => {
-    fileDir = await mkdtemp(join(tmpdir(), 'slackline-'));
+    fileDir = await mkdtemp(join(tmpdir(), 'remack-'));
     return fileStorage(join(fileDir, 'data.json'));
   },
   async () => rm(fileDir, { recursive: true, force: true })
@@ -75,7 +75,7 @@ test('memoryStorage returns copies, not live references', async () => {
 });
 
 test('fileStorage persists across instances (restart survival)', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'slackline-'));
+  const dir = await mkdtemp(join(tmpdir(), 'remack-'));
   const path = join(dir, 'nested', 'data.json');
 
   try {

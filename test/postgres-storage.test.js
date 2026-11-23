@@ -16,7 +16,7 @@ test('get returns the JSONB value or null', async () => {
   assert.deepEqual(await storage.get('installations', 'T:T1'), { a: 1 });
   assert.equal(await storage.get('installations', 'T:missing'), null);
   assert.deepEqual(pool.calls[0].params, ['installations', 'T:T1']);
-  assert.match(pool.calls[0].text, /FROM slackline_kv WHERE ns = \$1 AND key = \$2/);
+  assert.match(pool.calls[0].text, /FROM remack_kv WHERE ns = \$1 AND key = \$2/);
 });
 
 test('put upserts with stringified value into the injected table', async () => {
@@ -35,7 +35,7 @@ test('delete removes by ns and key', async () => {
   const storage = postgresStorage({ pool, logger: fakeLogger() });
 
   await storage.delete('ns', 'k');
-  assert.match(pool.calls[0].text, /DELETE FROM slackline_kv WHERE ns = \$1 AND key = \$2/);
+  assert.match(pool.calls[0].text, /DELETE FROM remack_kv WHERE ns = \$1 AND key = \$2/);
 });
 
 test('list orders by key and applies escaped prefix and limit', async () => {

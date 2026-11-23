@@ -1,5 +1,5 @@
 /**
- * Minimal slackline bot in route-module style.
+ * Minimal remack bot in route-module style.
  *
  * Every Slack surface is one file in routes/ — see the filenames for the
  * convention. Run with SLACK_BOT_TOKEN + SLACK_SIGNING_SECRET set, tunnel
@@ -27,4 +27,4 @@ const { url } = await serve({
   onIdle: app.idle,
 });
 
-console.log(`slackline example bot listening at ${url} — Slack Request URL: ${url}/events`);
+console.log(`remack example bot listening at ${url} — Slack Request URL: ${url}/events`);

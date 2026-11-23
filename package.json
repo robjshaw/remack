@@ -1,15 +1,16 @@
 {
-  "name": "@tbp/slackline",
+  "name": "remack",
   "version": "0.4.0",
   "description": "Zero-dependency, Remix-shaped Slack framework with a twilio-style CLI: web-standard Request/Response core, file-based route modules, error boundaries, pluggable KV storage, and scaffold/manifest/profiles/dev commands \u2014 no database required.",
   "type": "module",
   "bin": {
-    "slackline": "bin/slackline.js"
+    "remack": "bin/remack.js"
   },
   "exports": {
     ".": "./lib/index.js",
     "./node": "./lib/node.js",
     "./helpers": "./lib/helpers.js",
+    "./workflow": "./lib/workflow.js",
     "./ext/*": "./ext/*.js"
   },
   "files": [
@@ -29,6 +30,6 @@
   "scripts": {
     "test": "node --test",
     "example": "node examples/route-bot/app.js",
-    "build:apps-script": "node bin/slackline.js build:apps-script --out dist/apps-script/slackline.js"
+    "build:apps-script": "node bin/remack.js build:apps-script --out dist/apps-script/remack.js"
   }
 }

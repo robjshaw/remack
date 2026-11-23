@@ -6,7 +6,7 @@ export default async function openModal({ client, triggerId }) {
     view: {
       type: 'modal',
       callback_id: 'demo',
-      title: { type: 'plain_text', text: 'slackline demo' },
+      title: { type: 'plain_text', text: 'remack demo' },
       submit: { type: 'plain_text', text: 'Submit' },
       blocks: [
         {

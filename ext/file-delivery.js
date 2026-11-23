@@ -13,7 +13,7 @@ import { normalizeLogger } from '../lib/logger.js';
 /**
  * Deliver text content to a user as a file (or inline fallback).
  *
- * @param {Object} client - slackline client (createClient / args.client)
+ * @param {Object} client - remack client (createClient / args.client)
  * @param {Object} options
  * @param {string} options.userId - Slack user ID to DM
  * @param {string} options.content - File content (e.g. CSV text)

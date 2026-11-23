@@ -1,43 +1,46 @@
-# slackline
+# remack
 
-A zero-dependency, Remix-shaped Slack framework. The app is a web-standard
-`(Request) => Response` fetch handler; every Slack surface is one file in a
-`routes/` directory; the HTTP response IS the ack.
+A zero-dependency Slack bot framework for Node 22 and up. Each Slack command, button, modal, event, or workflow step lives in its own file under `routes/`, and whatever your handler returns becomes the HTTP response to Slack.
 
-- **Zero runtime dependencies, no database required.** Signature
-  verification via WebCrypto, the Web API via `fetch`, OAuth included —
-  state lives in a pluggable KV storage that defaults to memory. Node ≥ 22
-  (Bun/Deno/Workers-portable core).
-- **Route modules.** Colocate `loader` (data), `default` (handler), `render`
-  (Block Kit), and `ErrorBoundary` per surface — no build step, routes are
-  discovered with an fs scan at startup.
-- **Structurally safe acks.** Events are acked before handlers run; unknown
-  interactions are always acked; handler errors run a boundary chain and
-  still return 200.
+remack has no runtime dependencies and needs no database to start. Request verification uses WebCrypto, Slack Web API calls use `fetch`, OAuth is built in, and state sits in a four-method key-value store that defaults to memory. The core app is a standard `(Request) => Response` fetch handler, so it runs on Node, Cloud Run, Cloudflare Workers, Netlify, or Vercel.
 
-**Full API contract: [AGENTS.md](./AGENTS.md)** — written to be read by
-humans and LLMs alike.
+See [AGENTS.md](./AGENTS.md) for the full API reference.
 
 ## Quickstart
 
-```
-npm link                        # once, from this repo (registers the `slackline` command)
-slackline create my-bot         # scaffold: app.js + working routes for every pattern
+Link the CLI once from this repo, scaffold a bot, and run it:
+
+```bash
+npm link
+remack create my-bot
 cd my-bot && npm install
-slackline manifest --url https://YOUR-TUNNEL   # paste into api.slack.com → "Create from manifest"
-slackline profiles:add my-bot   # save credentials once (twilio-cli style; or cp .env.example .env)
-slackline dev                   # run with watch; env comes from .env + active profile
 ```
 
-Or by hand — the whole app is:
+From there, you have two ways to get a public HTTPS URL for Slack:
+
+1. Local dev with a tunnel (ngrok, cloudflared, etc.):
+
+```bash
+remack manifest --url https://YOUR-TUNNEL   # paste into api.slack.com -> "Create from manifest"
+remack profiles:add my-bot                  # save credentials once, or copy .env.example to .env
+remack dev                                  # runs with --watch using .env + active profile
+```
+
+2. Deploy straight to Google Cloud Run (no tunnel needed):
+
+```bash
+remack deploy:gcp --region us-central1 --sync-env --push-manifest --app-id A01234567
+```
+
+If you prefer to wire an app by hand instead of using `remack create`, the whole setup is three small files:
 
 ```js
 // app.js
-import { createApp, serve } from '@tbp/slackline';
+import { createApp, serve } from 'remack';
 
 const app = createApp({ routes: new URL('./routes/', import.meta.url) });
 await app.ready;
-await serve({ fetch: app.fetch, port: 3000, onIdle: app.idle });
+await serve({ fetch: app.fetch, port: process.env.PORT || 3000, onIdle: app.idle });
 ```
 
 ```js
@@ -46,150 +49,249 @@ export default async () => 'pong';
 ```
 
 ```js
-// routes/event.app_home_opened.js — loader + render, framework publishes
-export const loader = async ({ client, userId }) => ({ user: await client.users.info({ user: userId }) });
+// routes/event.app_home_opened.js
+export const loader = async ({ client, userId }) => ({
+  user: await client.users.info({ user: userId }),
+});
+
 export const render = ({ data }) => [
   { type: 'section', text: { type: 'mrkdwn', text: `Hi ${data.user.user.real_name}` } },
 ];
 ```
 
-Point every Slack Request URL (commands, interactivity, events, options) at
-`https://<host>/events`. Runnable demo: `examples/route-bot/`.
+Point all Slack Request URLs (slash commands, interactivity, events, and options) at `https://<your-host>/events`. For a full working demo, see `examples/route-bot/`.
 
-## Route filename convention
+## How routes work
+
+Every route file in `routes/` follows the `{kind}.{id}.js` naming pattern. remack scans the directory at startup with no build step.
 
 | File | Handles |
 |---|---|
 | `command.report.js` | slash command `/report` |
 | `action.open_settings.js` | block action `action_id: open_settings` |
-| `action.row_$.js` | action_ids matching `/^row_.*$/` (`$` = wildcard) |
-| `view.settings.js` | modal submit `callback_id: settings` |
+| `action.row_$.js` | action_ids matching `/^row_.*$/` (`$` is a wildcard) |
+| `view.settings.js` | modal submission `callback_id: settings` |
 | `view_closed.settings.js` | modal close |
-| `shortcut.new_task.js` | global/message shortcut |
+| `shortcut.new_task.js` | global or message shortcut |
 | `options.project_picker.js` | external-select suggestions |
 | `event.app_home_opened.js` | Events API event type |
+| `function.prep_step.js` | Slack Workflow Builder custom step (`function_executed`) |
+
+Each file can export `default` (the handler), `loader` (data fetched into `args.data`), `render` (Block Kit for declarative surfaces like the App Home tab), and `ErrorBoundary` (per-route error handling).
+
+Slack expects an HTTP 200 within 3 seconds. remack handles that by default: events and custom workflow steps ack 200 before your code runs, unmatched interactions still ack 200 so users never see a timeout warning, and uncaught errors run through `ErrorBoundary`, then app `onError`, then a safe fallback while still returning 200. For slow work inside commands or actions, wrap it in `args.defer(async () => { ... })`.
+
+## Workflows
+
+remack supports both Slack's native Workflow Builder custom steps and in-app multi-step workflows.
+
+### Slack Workflow Builder custom steps
+
+Drop a `function.<callback_id>.js` file in `routes/`. Export `manifest` with `defineFunctionManifest` so `remack manifest --inspect` includes the step's inputs and outputs:
+
+```js
+// routes/function.greet_user.js
+import { defineFunctionManifest, Schema } from 'remack';
+
+export const manifest = defineFunctionManifest({
+  title: 'Greet User',
+  inputs: {
+    user_id: { type: Schema.user_id, title: 'User', required: true },
+  },
+  outputs: {
+    greeting: { type: Schema.string, title: 'Greeting', required: true },
+  },
+});
+
+export default async ({ inputs }) => ({
+  greeting: `Hello <@${inputs.user_id}>!`,
+});
+```
+
+Returning an object automatically calls `functions.completeSuccess`. Throwing an error calls `functions.completeError`. Returning `undefined` leaves the step open so you can finish it later from a button click or modal submission using `client.functions.completeSuccess`.
+
+### In-app multi-step workflows
+
+When you need a multi-step flow with approvals or modals inside your bot, use `createWorkflow`. It stores run state in `storage`, pauses on `pause()`, and generates the trigger, action, and modal routes for you:
+
+```js
+import { createApp, createWorkflow, pause, fileStorage } from 'remack';
+
+const storage = fileStorage('./data/bot.json');
+
+const deployFlow = createWorkflow({
+  id: 'deploy',
+  title: 'Deploy Service',
+  storage,
+  trigger: { kind: 'command', id: '/deploy' },
+  steps: [
+    {
+      id: 'approve',
+      title: 'Manager approval',
+      run: async ({ client, args, actionId }) => {
+        await client.chat.postMessage({
+          channel: args.channelId,
+          text: 'Approve this deploy?',
+          blocks: [
+            {
+              type: 'actions',
+              elements: [
+                {
+                  type: 'button',
+                  text: { type: 'plain_text', text: 'Approve' },
+                  action_id: actionId(),
+                  value: 'approved',
+                },
+              ],
+            },
+          ],
+        });
+        return pause();
+      },
+      onResume: ({ resumeInput }) => ({ approvedBy: resumeInput.userId }),
+    },
+    {
+      id: 'ship',
+      title: 'Ship release',
+      run: async ({ state }) => ({ shippedBy: state.approvedBy }),
+    },
+  ],
+});
+
+const app = createApp({ storage, routes: [...deployFlow.routes()] });
+```
+
+Use `deployFlow.renderProgress(run)` to render step status as Block Kit, and `extractViewValues(payload)` to flatten Slack's nested `view.state.values` on modal submissions.
 
 ## CLI
 
 | Command | Does |
 |---|---|
-| `slackline create <dir>` | Scaffold a bot (`--mode token\|oauth`, `--target apps-script`) |
-| `slackline build:apps-script` | Bundle slackline into one script for Google Apps Script |
-| `slackline dev [entry]` | Run with `--watch`; env layered process → `.env` → active profile |
-| `slackline routes` | Show the route table with each module's exports |
-| `slackline manifest` | Slack App Manifest derived from `routes/` (`--url`, `--oauth`, `--out`) |
-| `slackline profiles[:add\|:use\|:remove]` | Credential profiles in `~/.config/slackline/` |
+| `remack create <dir>` | Scaffold a bot (`--mode token\|oauth`, `--target apps-script`) |
+| `remack dev [entry]` | Run with `--watch`; env comes from process, then `.env`, then active profile |
+| `remack routes` | Print the route table and each module's exports |
+| `remack manifest` | Generate Slack App Manifest v2 JSON from `routes/` (`--url`, `--oauth`, `--inspect`, `--out`) |
+| `remack manifest:validate` | Validate your manifest against Slack's `apps.manifest.validate` API |
+| `remack manifest:push` | Push manifest updates to an existing Slack app (`--app-id A0...`) |
+| `remack manifest:create` | Create a new Slack app from your manifest and print its credentials |
+| `remack deploy:gcp` | Deploy to Google Cloud Run and optionally run `manifest:push` |
+| `remack build:apps-script` | Bundle remack into one script for Google Apps Script |
+| `remack profiles[:add\|:use\|:remove]` | Manage credential profiles in `~/.config/remack/` |
 
-The manifest is the onboarding shortcut: your route files already declare the
-commands, events, and interactivity — `manifest` turns them into the exact
-JSON Slack's "Create from manifest" screen wants, right URLs included.
+Because your route files already declare your commands, events, shortcuts, and workflow steps, `remack manifest` generates the Slack App Manifest JSON for you. With an App Configuration Token (`SLACK_APP_CONFIG_TOKEN` or `--config-token`), `manifest:create`, `manifest:validate`, and `manifest:push` sync changes straight to Slack without copying and pasting JSON in the browser.
 
-## Google Apps Script: no server at all
+## Deploying to Google Cloud Run
 
+Cloud Run gives you a stable HTTPS URL with no tunnel and no Dockerfile. Cloud Run's Node.js buildpack runs `npm start`, and bots scaffolded with `remack create` already listen on `process.env.PORT`.
+
+```bash
+# Preview the gcloud command first
+remack deploy:gcp --region us-central1 --project my-gcp-project --dry-run
+
+# Deploy and sync SLACK_* vars from .env or your active profile
+remack deploy:gcp --region us-central1 --project my-gcp-project --sync-env
+
+# Deploy with Secret Manager and push the new Cloud Run URL into Slack
+remack deploy:gcp \
+  --region us-central1 \
+  --set-secrets SLACK_SIGNING_SECRET=slack-secret:latest,SLACK_BOT_TOKEN=slack-token:latest \
+  --push-manifest --app-id A01234567
 ```
-slackline create my-bot --target apps-script
+
+By default, `deploy:gcp` passes `--no-cpu-throttling` so Cloud Run does not freeze `defer()`, `event.*`, or `function.*` work after the HTTP 200 response goes out. Pass `--cpu-throttling` if your bot does no post-ack work.
+
+## Google Apps Script (no server)
+
+If you want to run an internal bot with no server hosting at all, scaffold an Apps Script project:
+
+```bash
+remack create my-bot --target apps-script
 ```
 
-gives you `Code.js` + `slackline.js` to paste into script.google.com (or
-push with clasp). Deploy as a web app, point Slack at it, done: no hosting,
-free on any Google account. (No Node? Copy `dist/apps-script/slackline.js`
-from this repo instead of running the CLI.)
+This creates `Code.js` and `remack.js` to paste into script.google.com (or push with `clasp`). Deploy it as a web app, point Slack at the web app URL, and you are live on any Google account. Without Node installed, you can copy `dist/apps-script/remack.js` directly from this repo.
 
 ```js
 function routes() {
-  return [Slackline.route('command', '/ping', { default: () => 'pong' })];
+  return [Remack.route('command', '/ping', { default: () => 'pong' })];
 }
 let app_;
-function app() { return app_ || (app_ = Slackline.createAppsScriptApp({ routes: routes() })); }
+function app() { return app_ || (app_ = Remack.createAppsScriptApp({ routes: routes() })); }
 function doPost(e) { return app().doPost(e); }
 ```
 
-The trade-offs are real, so the scaffold's README spells them out:
-- **Weaker request auth.** Apps Script can't read headers, so the request
-  signature can't be checked. Requests are authenticated with Slack's
-  verification token plus a secret `?key=` on the URL instead.
-- **Synchronous handlers.** No async/await, and no `defer()`.
-- **Everything runs inside Slack's 3-second window**, cold start included.
+Apps Script comes with three limits to keep in mind:
+- Apps Script cannot read HTTP request headers, so HMAC signature checks are not possible. Requests are checked with Slack's verification token plus a secret `?key=` query parameter on the URL instead.
+- Handlers must be synchronous (no `async`/`await` and no `defer()`).
+- All work runs inside Slack's 3-second ack window, cold start included.
 
-Good for internal tools and prototypes. For anything sensitive, use the
-Node or serverless targets.
+It works well for internal utilities and quick prototypes. For production or sensitive data, use Node, Cloud Run, or another serverless target.
 
-## Env vars
+## Storage
+
+Everything that persists (OAuth installations, workflow runs, feature grants, engagement counts) uses the same four-method KV interface (`get`, `put`, `delete`, `list`). Start in memory and swap the backend later without changing your routes:
+
+```js
+import { createApp, fileStorage } from 'remack';
+import { postgresStorage } from 'remack/ext/postgres-storage.js';
+
+createApp({ ... });                                     // memory (default)
+createApp({ storage: fileStorage('./data/bot.json') }); // single JSON file
+createApp({ storage: postgresStorage({ pool }) });      // Postgres (1 table, see migrations/)
+```
+
+In OAuth mode, installations persist in whatever `storage` you pass (with a startup warning if you leave it on the in-memory default).
+
+## Hosting and runtimes
+
+`app.fetch(request, ...platformArgs)` works anywhere web `Request` and `Response` exist. On long-running Node servers, use `serve({ fetch: app.fetch, onIdle: app.idle })`. On serverless runtimes, post-ack work (`defer()` and events) is passed to `waitUntil` automatically when present:
+
+```js
+// Cloudflare Workers (ctx.waitUntil is detected automatically)
+export default { fetch: (req, env, ctx) => app.fetch(req, env, ctx) };
+
+// Vercel
+import { waitUntil } from '@vercel/functions';
+const app = createApp({ waitUntil, ... });
+```
+
+## Environment variables
 
 | Variable | Purpose |
 |---|---|
-| `SLACK_SIGNING_SECRET` | Request verification (required) |
-| `SLACK_BOT_TOKEN` | Single-token mode (the default mode) |
-| `SLACK_ALERTS_CHANNEL` | `ext/ops-alert` destination |
-| `SLACKLINE_DEBUG` | Debug output from the fallback logger |
+| `SLACK_SIGNING_SECRET` | Request signature verification (required) |
+| `SLACK_BOT_TOKEN` | Single-workspace bot token (default mode) |
+| `SLACK_APP_CONFIG_TOKEN` | App Configuration Token for `manifest:validate\|push\|create` |
+| `SLACK_APP_ID` | Default Slack App ID for `manifest:push` and `deploy:gcp` |
+| `SLACK_ALERTS_CHANNEL` | Channel for `ext/ops-alert` |
+| `REMACK_DEBUG` | Enable debug logs on the fallback console logger |
 
-Env is only a default for explicit options — pass `createApp({ env })` to
-read from somewhere other than `process.env` (e.g. Workers bindings). An
-explicit `oauth` config always means OAuth mode, even if `SLACK_BOT_TOKEN`
-happens to be set. slackline never reads `DATABASE_URL` and never opens
-connections.
+Environment variables are only defaults for explicit options. Pass `createApp({ env })` to read from another source (such as Cloudflare Workers bindings). Passing an explicit `oauth` object always selects OAuth mode, even if `SLACK_BOT_TOKEN` is set in the environment. remack never reads `DATABASE_URL` or opens database connections on its own.
 
-## Hosting
+## Logging and multi-app processes
 
-The app is `app.fetch(request, ...platformArgs)`. Long-running Node:
-`serve()`. Serverless: post-ack work (events, `defer`) is handed to the
-platform's `waitUntil` so it isn't frozen after the response —
+Every request gets a `requestId` and a bound logger at `args.log` carrying `{requestId, kind, id, teamId, userId}`. Each request finishes with one summary line (`Slack request handled {status, outcome, ackMs}`), or a `Slow Slack ack` warning if it takes longer than 2 seconds.
 
-```js
-export default { fetch: (req, env, ctx) => app.fetch(req, env, ctx) };  // Workers: ctx.waitUntil picked up
-createApp({ waitUntil, ... });                                          // Vercel: from @vercel/functions
-```
-
-## Logging
-
-Every request gets a `requestId` and `args.log`, a logger bound to
-`{requestId, kind, id, teamId, userId}`, and ends with one line:
-`Slack request handled {status, outcome, ackMs}` — or a `Slow Slack ack`
-warning past 2s, before Slack's 3s cutoff bites.
-
-## Several apps, one process
+To host multiple Slack apps in one process, give each app its own `namespace`:
 
 ```js
 const sales = createApp({ namespace: 'sales', storage, oauth: salesOAuth, signingSecret: SALES_SECRET });
 const support = createApp({ namespace: 'support', storage, oauth: supportOAuth, signingSecret: SUPPORT_SECRET });
 ```
 
-`namespace` scopes storage (`sales:installations`) and tags logs, so apps
-can share one Postgres table without colliding.
+`namespace` prefixes storage keys (`sales:installations`) and adds `{app: 'sales'}` to every log line so apps can share one database without colliding.
 
-## Storage — portable by default
+## Optional modules (`remack/ext/*`)
 
-Everything that persists (OAuth installations, feature grants, engagement
-events) speaks one four-method KV contract. Pick the backend that fits, or
-implement the contract over anything:
-
-```js
-import { createApp, fileStorage } from '@tbp/slackline';
-
-createApp({ ... });                                        // memory (default): zero setup, dev-perfect
-createApp({ storage: fileStorage('./data/bot.json') });    // one JSON file: survives restarts
-```
-
-```js
-import { postgresStorage } from '@tbp/slackline/ext/postgres-storage.js';
-createApp({ storage: postgresStorage({ pool }) });         // shared DB: multi-instance (1 table, 1 migration)
-```
-
-OAuth mode needs no store configuration — installations persist in whatever
-`storage` you chose (with a startup warning if that's the in-memory
-default).
-
-## Optional modules (`@tbp/slackline/ext/*`)
-
-All storage-based (pass `app.storage`) except the pure ones: `ops-alert`
-(never-throws job alerts), `file-delivery` (DM upload with `missing_scope`
-inline fallback), `plan-block` (progress UI), `feature-access` (invite-only
-gating), `engagement-tracker` (analytics), `postgres-storage` (the Postgres
-storage adapter; SQL in `migrations/`).
+- `ops-alert`: post error alerts to a Slack channel without ever throwing
+- `file-delivery`: upload files to a DM with automatic inline text fallback on `missing_scope`
+- `plan-block`: Block Kit step-progress checklists
+- `feature-access`: invite-only feature gating backed by `app.storage`
+- `engagement-tracker`: lightweight usage tracking backed by `app.storage`
+- `postgres-storage`: Postgres KV adapter (SQL in `migrations/001_remack_kv.sql`)
 
 ## Development
 
-```
-npm test          # node:test — no network, no DB, no Slack
-npm run example   # examples/route-bot (needs SLACK_BOT_TOKEN + SLACK_SIGNING_SECRET)
+```bash
+npm test          # node:test (no network, no DB, no Slack credentials needed)
+npm run example   # runs examples/route-bot (needs SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET)
 ```

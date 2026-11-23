@@ -8,14 +8,14 @@ import { buildPlanBlock, createSteps } from '../../../ext/plan-block.js';
 export function loader({ context }) {
   return {
     startedAt: context.startedAt,
-    steps: createSteps(['Install slackline', 'Write a route', 'Ship your bot'])
+    steps: createSteps(['Install remack', 'Write a route', 'Ship your bot'])
       .map((step, index) => ({ ...step, status: index === 0 ? 'complete' : 'pending' })),
   };
 }
 
 export function render({ data }) {
   return [
-    ...buildPlanBlock({ title: 'slackline demo', steps: data.steps }),
+    ...buildPlanBlock({ title: 'remack demo', steps: data.steps }),
     {
       type: 'context',
       elements: [{ type: 'mrkdwn', text: `Bot running since ${data.startedAt.toISOString()}` }],

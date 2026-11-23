@@ -19,7 +19,7 @@ import { normalizeLogger } from '../lib/logger.js';
  * @param {string} [options.token] - Bot token (default: SLACK_BOT_TOKEN env)
  * @param {string} [options.channel] - Channel ID or name
  *   (default: SLACK_ALERTS_CHANNEL env), e.g. C0… or "#my-app-ops"
- * @param {Object} [options.client] - Pre-built slackline client (skips token)
+ * @param {Object} [options.client] - Pre-built remack client (skips token)
  * @param {Object} [options.logger]
  * @returns {{ sendOpsAlert: (title: string, opts?: {error?: Error, context?: Object}) => Promise<boolean> }}
  */

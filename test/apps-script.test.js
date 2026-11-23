@@ -296,15 +296,15 @@ test('the Apps Script bundle runs with no Node or web-platform globals', async (
     assert.equal(vm.runInContext(`typeof ${name}`, context), 'undefined', `${name} leaked into the test context`);
   }
 
-  vm.runInContext(source, context, { filename: 'slackline.js' });
+  vm.runInContext(source, context, { filename: 'remack.js' });
   // What a user's Code.js looks like
   vm.runInContext(`
     var __app;
     function app() {
-      return __app || (__app = Slackline.createAppsScriptApp({
+      return __app || (__app = Remack.createAppsScriptApp({
         routes: [
-          Slackline.route('command', '/report', { default: function (args) { return 'pong ' + args.payload.text; } }),
-          Slackline.route('event', 'app_mention', { default: function (args) { args.client.chat.postMessage({ channel: args.channelId, text: 'hi' }); } }),
+          Remack.route('command', '/report', { default: function (args) { return 'pong ' + args.payload.text; } }),
+          Remack.route('event', 'app_mention', { default: function (args) { args.client.chat.postMessage({ channel: args.channelId, text: 'hi' }); } }),
         ],
       }));
     }
@@ -334,7 +334,7 @@ function gasProject(sources, services) {
 }
 
 test('create --target apps-script scaffolds a project whose Code.js works end to end', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'slackline-gas-'));
+  const dir = await mkdtemp(join(tmpdir(), 'remack-gas-'));
   try {
     let output = '';
     const io = { stdout: { write: (chunk) => { output += chunk; } } };
@@ -367,7 +367,7 @@ test('create --target apps-script scaffolds a project whose Code.js works end to
     // Apps Script loads files in project order; Code.js first proves the lazy app() wiring
     const { context, logs } = gasProject([
       ['Code.js', await read('Code.js')],
-      ['slackline.js', await read('slackline.js')],
+      ['remack.js', await read('remack.js')],
     ], services);
 
     context.setup();
@@ -401,7 +401,7 @@ test('create --target apps-script scaffolds a project whose Code.js works end to
   }
 });
 
-test('dist/apps-script/slackline.js is up to date with lib/ (run: npm run build:apps-script)', async () => {
-  const shipped = await readFile(new URL('../dist/apps-script/slackline.js', import.meta.url), 'utf8');
+test('dist/apps-script/remack.js is up to date with lib/ (run: npm run build:apps-script)', async () => {
+  const shipped = await readFile(new URL('../dist/apps-script/remack.js', import.meta.url), 'utf8');
   assert.equal(shipped, await buildAppsScript());
 });

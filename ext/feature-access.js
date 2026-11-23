@@ -7,7 +7,7 @@
  *
  * Grants live in namespace 'feature-access' (key `{featureKey}:{userId}`);
  * an audit log of grants/revokes/denials (adoption + demand signal) lives in
- * 'feature-access-log'. Works with any slackline storage — memory, file, or
+ * 'feature-access-log'. Works with any remack storage — memory, file, or
  * a shared adapter.
  */
 
@@ -35,7 +35,7 @@ export const AccessEventType = {
 
 /**
  * @param {Object} options
- * @param {Object} options.storage - slackline storage (app.storage or your own)
+ * @param {Object} options.storage - remack storage (app.storage or your own)
  * @param {Object<string, FeatureConfig>} options.features - Keyed by command name
  * @param {boolean} [options.failOpen] - Allow access when storage errors (default true)
  * @param {Object} [options.logger]

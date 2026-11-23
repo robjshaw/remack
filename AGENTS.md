@@ -1,4 +1,4 @@
-# slackline — full contract
+# remack — full contract
 
 Zero-dependency Slack framework. ESM, Node ≥ 22, no build step. This file is
 the complete reference; the README is the tour.
@@ -9,7 +9,7 @@ the complete reference; the README is the tour.
    a web-standard `(Request) => Promise<Response>` — THE app. Mount it
    anywhere bytes arrive raw.
 2. Slack POSTs three wire shapes to one endpoint (`paths.events`,
-   default `/events`); slackline verifies, parses, and normalizes them, then
+   default `/events`); remack verifies, parses, and normalizes them, then
    dispatches to a route module.
 3. **The HTTP response is the ack.** A route's return value becomes the
    response body. Slack gives you 3 seconds — do slow work in `defer()`.
@@ -75,7 +75,7 @@ sharing one `storage` without a namespace share its `installations`.
 Implementations: `memoryStorage()` (core, default), `fileStorage(path)`
 (core; one JSON file, atomic writes, single-instance),
 `postgresStorage({pool, table?})` (`ext/postgres-storage.js`; one JSONB
-table, `migrations/001_slackline_kv.sql`, pool injected — pg never
+table, `migrations/001_remack_kv.sql`, pool injected — pg never
 imported). Implement the same four methods to back it with anything else
 (Redis, DynamoDB, Workers KV). Namespaces in use: `installations`,
 `feature-access`, `feature-access-log`, `engagement`, `analytics` — each
@@ -102,8 +102,8 @@ A module must export `default` or `render`.
 {
   requestId,     // incoming x-request-id, else a random UUID
   log,           // logger bound to {requestId, kind, id, teamId, userId[, app]}
-  kind,          // 'command'|'action'|'view'|'view_closed'|'shortcut'|'options'|'event'
-  id,            // '/report' | action_id | callback_id | event type
+  kind,          // 'command'|'action'|'view'|'view_closed'|'shortcut'|'options'|'event'|'function'
+  id,            // '/report' | action_id | callback_id | event type | function callback_id
   payload,       // FULL parsed body — the raw Slack payload, nothing hidden
   teamId, userId, channelId, triggerId, responseUrl,   // null when absent
   client,        // token-bound API client for this workspace
@@ -111,6 +111,10 @@ A module must export `default` or `render`.
   data,          // loader result
   respond(msg),  // POST to response_url (string → ephemeral text)
   defer(fn),     // run fn AFTER the ack; errors go to the boundary chain
+  // On kind === 'function' (Slack Workflow Builder custom steps):
+  inputs, functionExecutionId, workflowExecutionId,
+  complete(outputs),  // calls functions.completeSuccess
+  fail(error),        // calls functions.completeError
 }
 ```
 
@@ -125,6 +129,7 @@ A module must export `default` or `render`.
 | `shortcut` | `undefined` → 200; returned message → response_url when present |
 | `options` | `options([...])` / `optionGroups([...])` → JSON body · `undefined` → `{options: []}` |
 | `event` | **return ignored.** Framework acks 200 immediately; `loader` + handler run post-ack. `event.app_home_opened` with `render`: framework calls `views.publish({user_id, view})` (a returned blocks array is wrapped in `{type:'home', blocks}`) |
+| `function` | Slack Workflow Builder custom step (`function_executed`). Framework acks 200 immediately; `loader` + handler run post-ack. Returning an outputs object auto-calls `functions.completeSuccess`; throwing auto-calls `functions.completeError`; returning `undefined` leaves the step open for async completion. |
 
 Unmatched anything → acked 200 + logged. The route table is the allow-list;
 there is nothing to keep in sync.
@@ -140,7 +145,7 @@ array. Non-matching `.js` files in the dir are warned about and skipped.
 ## Errors
 
 ```js
-import { UserError } from '@tbp/slackline';
+import { UserError } from 'remack';
 throw new UserError('Pick a client first.');   // user sees this; no ops alert
 throw new Error('anything else');              // generic message + ops alert + log
 ```
@@ -156,7 +161,7 @@ logger, so they carry the `requestId`.
 ## Logging
 
 Bring any pino-like logger (`debug/info/warn/error(obj, msg)`, optional
-`child`); otherwise a console fallback (debug only with `SLACKLINE_DEBUG`).
+`child`); otherwise a console fallback (debug only with `REMACK_DEBUG`).
 Per `/events` request:
 
 - `args.log` — child logger bound to `requestId`, `kind`, `id`, `teamId`,
@@ -176,7 +181,7 @@ requests (works on loggers without `child`).
 ## Client
 
 ```js
-import { createClient, isSlackError } from '@tbp/slackline';
+import { createClient, isSlackError } from 'remack';
 const client = createClient({ token });
 await client.chat.postMessage({ channel, text });     // any method via dot-access
 await client.call('chat.postMessage', params);        // same thing
@@ -193,7 +198,7 @@ await client.files.upload({ channelId, filename, content /* or bytes */, title, 
 ## Adapters
 
 ```js
-import { serve, toNodeHandler } from '@tbp/slackline';           // or '@tbp/slackline/node'
+import { serve, toNodeHandler } from 'remack';           // or 'remack/node'
 const { url, close } = await serve({ fetch: app.fetch, port: 3000, onIdle: app.idle });
 expressApp.use('/slack', toNodeHandler(app.fetch));              // Express mount
 ```
@@ -232,7 +237,7 @@ tracked by `idle()`). The core imports `node:fs`/`node:http` via
 
 ## Google Apps Script (`lib/apps-script.js`)
 
-A serverless target on any Google account: `Slackline.createAppsScriptApp`
+A serverless target on any Google account: `Remack.createAppsScriptApp`
 in a script deployed as a web app (execute as me, access Anyone). Same
 route modules, args, ack model and boundary chain as `createApp`, with
 constraints that are the platform's, not bugs:
@@ -252,11 +257,11 @@ Single workspace (bot token) only. Logging is the same summary line per
 request (`outcome`, `ackMs`, `requestId` from `Utilities.getUuid`), visible
 under Executions. `requestId`/`log` are on args as in core.
 
-Distribution: Apps Script has no modules, so `slackline build:apps-script`
+Distribution: Apps Script has no modules, so `remack build:apps-script`
 bundles `lib/apps-script.js` and its imports into one script defining a
-global `Slackline` (`lib/cli/bundle.js` — a tiny bundler that only accepts
+global `Remack` (`lib/cli/bundle.js` — a tiny bundler that only accepts
 lib/'s own import/export style and refuses anything else). A prebuilt copy
-lives at `dist/apps-script/slackline.js` for no-Node setups; a test fails if
+lives at `dist/apps-script/remack.js` for no-Node setups; a test fails if
 it drifts from lib/ (`npm run build:apps-script`). Anything lib/apps-script.js
 imports must avoid fetch, URLSearchParams, URL, TextEncoder, crypto,
 process, Buffer and timers at runtime — a test runs the bundle on a bare V8
@@ -284,7 +289,7 @@ is always the raw shape.)
 - **`private_metadata` caps at 3KB.** Store a key, keep wizard state
   server-side. It's the only state that survives a modal round-trip.
 - **Text blocks cap at 3000 chars** — `splitSlackTextChunks` from
-  '@tbp/slackline/helpers'.
+  'remack/helpers'.
 - **response_action gotchas**: `errors` keys must be `block_id`s of input
   blocks; `update` needs a complete view; a malformed response_action fails
   silently (modal just closes). Use the `view.*` builders.
@@ -302,14 +307,29 @@ is always the raw shape.)
 
 | Import | Exports | Notes |
 |---|---|---|
-| `ext/postgres-storage.js` | `postgresStorage({pool, table?})` | storage adapter; migrations/001_slackline_kv.sql |
+| `ext/postgres-storage.js` | `postgresStorage({pool, table?})` | storage adapter; migrations/001_remack_kv.sql |
 | `ext/ops-alert.js` | `createOpsAlert({token?, channel?, client?})` → `{sendOpsAlert}` | never throws |
 | `ext/file-delivery.js` | `deliverFileToUser(client, {userId, content, filename, ...})` | missing_scope fallback |
 | `ext/plan-block.js` | `buildPlanBlock, createSteps, updateStepProgress, buildCompletionBlocks` | pure Block Kit |
 | `ext/feature-access.js` | `createFeatureAccess({storage, features, failOpen?})` | pass `app.storage`; failOpen default true |
 | `ext/engagement-tracker.js` | `createEngagementTracker({storage, eventTypes?})` | pass `app.storage`; aggregates computed in JS — bot-scale by design |
 
-## CLI (`slackline`, bin/slackline.js — zero-dep, topic:command style)
+## Workflow Builder (`lib/workflow.js` — exported from `remack` and `remack/workflow`)
+
+- **Slack custom workflow steps**: `Schema` (Manifest v2 type constants like
+  `Schema.user_id` → `slack#/types/user_id`), `defineFunctionManifest({title,
+  description, inputs, outputs})` (export as `manifest` from
+  `routes/function.<id>.js` for `remack manifest --inspect`), and
+  `defineFunction({id, title, inputs, outputs, default})` (returns a `RouteDef`
+  for `createApp({routes})`).
+- **In-app multi-step workflows**: `createWorkflow({id, title, steps, storage,
+  trigger, onComplete, onError})` — persists run state in `storage` under
+  namespace `workflows`, supports human-in-the-loop `pause()` / `resume()`,
+  renders Block Kit progress (`renderProgress(run)`), flattens modal values
+  (`extractViewValues(payload)`), and generates `RouteDef[]` via
+  `workflow.routes()`.
+
+## CLI (`remack`, bin/remack.js — zero-dep, topic:command style)
 
 - `create <dir> [--mode token|oauth] [--name]` — scaffold: package.json
   (file: dep on this repo), app.js, routes/ with working command/action/
@@ -317,27 +337,39 @@ is always the raw shape.)
   existing package.json.
 - `create <dir> --target apps-script [--name]` — Google Apps Script
   project: Code.js (command/event/home/action examples + `doPost` + a
-  `setup()` that creates the URL key), slackline.js (the bundle),
+  `setup()` that creates the URL key), remack.js (the bundle),
   appsscript.json (V8, web app), slack-manifest.json, .claspignore, README
   with the browser-only and clasp paths. Refuses to overwrite a Code.js;
   `--mode oauth` is rejected.
-- `build:apps-script [--out slackline.js]` — write the Apps Script bundle.
+- `build:apps-script [--out remack.js]` — write the Apps Script bundle.
 - `dev [entry] [--no-watch]` — spawns `node --watch app.js` with env layered
   process env → `./.env` (built-in parser) → active profile. Fails fast with
   guidance when SLACK_SIGNING_SECRET is missing.
 - `routes [--dir routes]` — table of kind/id/exports; filename-derived, with
   best-effort module import for the exports column.
-- `manifest [--url U] [--name N] [--oauth] [--out file] [--dir routes]` —
-  Slack App Manifest JSON derived from route filenames only (never imports
-  user code): slash_commands from `command.*`, bot_events from `event.*`,
-  interactivity from action/view/shortcut/options, app_home from
-  `event.app_home_opened`, scopes from a small event→scope map
-  (+`chat:write`, `commands`), `redirect_urls` with `--oauth`.
+- `manifest [--url U] [--name N] [--oauth] [--inspect] [--out file] [--dir routes]` —
+  Slack App Manifest v2 JSON derived from route filenames (never imports user
+  code unless `--inspect` is passed): slash_commands from `command.*`,
+  shortcuts from `shortcut.*`, custom workflow steps (`functions` +
+  `function_executed`) from `function.*`, bot_events from `event.*`,
+  interactivity from action/view/shortcut/options/function, app_home from
+  `event.app_home_opened`, scopes from event→scope map (incl. `message.im`,
+  `message.channels`, `message.groups`, `message.mpim`), `redirect_urls` with
+  `--oauth`.
+- `manifest:validate`, `manifest:push --app-id A0...`, `manifest:create` —
+  call Slack's `apps.manifest.{validate,update,create}` API using
+  `SLACK_APP_CONFIG_TOKEN` (`--config-token` or active profile).
+- `deploy:gcp [--service S] [--region R] [--project P] [--sync-env] [--set-secrets ...] [--push-manifest] [--app-id A0...] [--dry-run]` —
+  runs `gcloud run deploy --source . --allow-unauthenticated --no-cpu-throttling`
+  (so `defer()` / event continuations aren't frozen post-ack), reads the live
+  `https://…run.app` URL, and optionally pushes it straight into Slack via
+  `manifest:push`.
 - `profiles`, `profiles:add <name> [--bot-token --signing-secret --client-id
-  --client-secret --state-secret --alerts-channel] [--no-input]`,
+  --client-secret --state-secret --alerts-channel --config-token --app-id]
+  [--no-input]`,
   `profiles:use <name>`, `profiles:remove <name>` — credential profiles at
-  `$XDG_CONFIG_HOME/slackline/config.json` (override dir with
-  `SLACKLINE_CONFIG_DIR`), tokens masked in listings, newest add becomes
+  `$XDG_CONFIG_HOME/remack/config.json` (override dir with
+  `REMACK_CONFIG_DIR`), tokens masked in listings, newest add becomes
   active, field→env mapping in `lib/cli/config.js` `PROFILE_ENV_MAP`.
 
 ## Testing your bot

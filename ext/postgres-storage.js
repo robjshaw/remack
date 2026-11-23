@@ -1,11 +1,11 @@
 /**
- * Postgres adapter for the slackline storage contract.
+ * Postgres adapter for the remack storage contract.
  *
- * One table (migrations/001_slackline_kv.sql), JSONB values, primary key
+ * One table (migrations/001_remack_kv.sql), JSONB values, primary key
  * (ns, key). Use when the bot runs multiple instances or you already have
  * Postgres; memoryStorage()/fileStorage() cover everything else.
  *
- * The pg Pool is injected — slackline never opens connections, never reads
+ * The pg Pool is injected — remack never opens connections, never reads
  * DATABASE_URL, and never imports pg.
  */
 
@@ -16,10 +16,10 @@ const IDENTIFIER_RE = /^[a-z_][a-z0-9_.]*$/i;
 /**
  * @param {Object} options
  * @param {Object} options.pool - pg Pool (anything with query(text, params))
- * @param {string} [options.table] - Default 'slackline_kv'
+ * @param {string} [options.table] - Default 'remack_kv'
  * @param {Object} [options.logger]
  */
-export function postgresStorage({ pool, table = 'slackline_kv', logger: rawLogger } = {}) {
+export function postgresStorage({ pool, table = 'remack_kv', logger: rawLogger } = {}) {
   const logger = normalizeLogger(rawLogger);
 
   if (!pool) {

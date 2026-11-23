@@ -1,4 +1,4 @@
-/** Shared test doubles for slackline tests. */
+/** Shared test doubles for remack tests. */
 
 import { createHmac } from 'node:crypto';
 

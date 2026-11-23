@@ -19,14 +19,14 @@ function io() {
 }
 
 async function withTempConfig(fn) {
-  const dir = await mkdtemp(join(tmpdir(), 'slackline-cli-'));
-  const previous = process.env.SLACKLINE_CONFIG_DIR;
-  process.env.SLACKLINE_CONFIG_DIR = dir;
+  const dir = await mkdtemp(join(tmpdir(), 'remack-cli-'));
+  const previous = process.env.REMACK_CONFIG_DIR;
+  process.env.REMACK_CONFIG_DIR = dir;
   try {
     return await fn(dir);
   } finally {
-    if (previous === undefined) delete process.env.SLACKLINE_CONFIG_DIR;
-    else process.env.SLACKLINE_CONFIG_DIR = previous;
+    if (previous === undefined) delete process.env.REMACK_CONFIG_DIR;
+    else process.env.REMACK_CONFIG_DIR = previous;
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -102,7 +102,7 @@ test('profileEnv maps active profile to env vars without clobbering existing', a
 });
 
 test('create scaffolds a runnable token-mode project and refuses to overwrite', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'slackline-scaffold-'));
+  const dir = await mkdtemp(join(tmpdir(), 'remack-scaffold-'));
   const target = join(dir, 'my-bot');
 
   try {
@@ -112,7 +112,7 @@ test('create scaffolds a runnable token-mode project and refuses to overwrite', 
 
     const pkg = JSON.parse(await readFile(join(target, 'package.json'), 'utf8'));
     assert.equal(pkg.name, 'my-bot');
-    assert.match(pkg.dependencies['@tbp/slackline'], /^file:/);
+    assert.match(pkg.dependencies['remack'], /^file:/);
 
     const routeFiles = await readdir(join(target, 'routes'));
     assert.deepEqual(routeFiles.sort(), [
@@ -136,7 +136,7 @@ test('create scaffolds a runnable token-mode project and refuses to overwrite', 
 });
 
 test('create --mode oauth wires oauth config and fileStorage', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'slackline-scaffold-'));
+  const dir = await mkdtemp(join(tmpdir(), 'remack-scaffold-'));
   const target = join(dir, 'oauth-bot');
 
   try {
@@ -227,7 +227,7 @@ test('resolveEnv layers process env over .env over profile', async () => {
       '--signing-secret', 'secret-from-profile',
       '--alerts-channel', '#from-profile'], io());
 
-    const dir = await mkdtemp(join(tmpdir(), 'slackline-env-'));
+    const dir = await mkdtemp(join(tmpdir(), 'remack-env-'));
     try {
       const { writeFile } = await import('node:fs/promises');
       await writeFile(join(dir, '.env'), 'SLACK_BOT_TOKEN=xoxb-from-dotenv\n');

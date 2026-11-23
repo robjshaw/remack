@@ -27,7 +27,7 @@ export const CoreEventType = {
 
 /**
  * @param {Object} options
- * @param {Object} options.storage - slackline storage (app.storage or your own)
+ * @param {Object} options.storage - remack storage (app.storage or your own)
  * @param {Object<string,string>} [options.eventTypes] - App event enum,
  *   merged over CoreEventType, exposed as `EventType`
  * @param {Object} [options.logger]
