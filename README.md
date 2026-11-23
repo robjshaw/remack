@@ -29,7 +29,7 @@ remack dev                                  # runs with --watch using .env + act
 2. Deploy straight to Google Cloud Run (no tunnel needed):
 
 ```bash
-remack deploy:gcp --region us-central1 --sync-env --push-manifest --app-id A01234567
+remack deploy:gcp --region us-central1 --sync-env --push-manifest --app-id YOUR_SLACK_APP_ID
 ```
 
 If you prefer to wire an app by hand instead of using `remack create`, the whole setup is three small files:
@@ -195,7 +195,7 @@ remack deploy:gcp --region us-central1 --project my-gcp-project --sync-env
 remack deploy:gcp \
   --region us-central1 \
   --set-secrets SLACK_SIGNING_SECRET=slack-secret:latest,SLACK_BOT_TOKEN=slack-token:latest \
-  --push-manifest --app-id A01234567
+  --push-manifest --app-id YOUR_SLACK_APP_ID
 ```
 
 By default, `deploy:gcp` passes `--no-cpu-throttling` so Cloud Run does not freeze `defer()`, `event.*`, or `function.*` work after the HTTP 200 response goes out. Pass `--cpu-throttling` if your bot does no post-ack work.
