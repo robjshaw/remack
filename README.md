@@ -295,3 +295,7 @@ const support = createApp({ namespace: 'support', storage, oauth: supportOAuth, 
 npm test          # node:test (no network, no DB, no Slack credentials needed)
 npm run example   # runs examples/route-bot (needs SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET)
 ```
+
+## License
+
+[MIT](./LICENSE)
